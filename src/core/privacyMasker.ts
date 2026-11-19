@@ -72,6 +72,10 @@ export class PrivacySessionMasker {
    * 문자열 내부의 가명 토큰([[...]])을 원본 텍스트로 복원합니다.
    * 다중 턴 세션 동안 누적된 매핑 테이블을 사용하여 요약문, 도구 인자, 피드백 문구를 복원할 때 사용합니다.
    */
+  public getTokenMap(): Array<[string, string]> {
+    return Array.from(this.tokenToRaw.entries());
+  }
+
   public unmaskText(text: string): string {
     if (!text) return text;
     let out = text;

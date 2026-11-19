@@ -113,6 +113,7 @@ describe("Stream A: OpTranslator - insert_nested_table", () => {
       {
         id: "ex1",
         targetType: "cell" as const,
+        label: "표1 (2행 2열)",
         tableIndex: 0,
         row: 1,
         col: 1,

@@ -437,12 +437,13 @@ async function runLayoutCheck(filePath) {
  */
 async function runOfficialFormat(filePath, applyChanges = false) {
   const extractScript = path.join(CLAW_SCRIPTS_DIR, "extract_text.js");
-  const res = await runNodeScript(extractScript, [filePath, "--json"]);
+  const res = await runNodeScript(extractScript, ["--format", "text", filePath]);
   if (res.code !== 0) {
     throw new Error(`문서 분석 실패: ${res.stderr}`);
   }
-  const docJson = JSON.parse(res.stdout);
-  const paragraphs = docJson.paragraphs || [];
+  const paragraphs = res.stdout
+    .split(/\r?\n/)
+    .map((line, idx) => ({ index: idx, text: line }));
   const isHwpx = /\.hwpx$/i.test(filePath);
 
   // Korean public official outline hierarchy patterns: 1. -> 가. -> 1) -> 가) -> (1) -> (가) -> ①
@@ -560,18 +561,29 @@ async function main() {
         const tables = await parseHwpxTablesHierarchy(fs.readFileSync(targetFile));
         console.log(JSON.stringify({ file: targetFile, format: "hwpx", tableCount: tables.length, tables }, null, 2));
       } else {
-        const res = await runNodeScript(path.join(CLAW_SCRIPTS_DIR, "extract_text.js"), [targetFile, "--json"]);
+        const res = await runNodeScript(path.join(CLAW_SCRIPTS_DIR, "extract_text.js"), [
+          "--inspect",
+          "--with-cell-text",
+          targetFile,
+        ]);
+        if (res.code !== 0) {
+          throw new Error(res.stderr || "extract_text failed");
+        }
         const parsed = JSON.parse(res.stdout);
         console.log(JSON.stringify({ file: targetFile, format: "hwp", tables: parsed.tables || [] }, null, 2));
       }
       return;
     }
-    const modeFlag = flags.markdown ? "--markdown" : "--json";
-    const res = await runNodeScript(path.join(CLAW_SCRIPTS_DIR, "extract_text.js"), [targetFile, modeFlag]);
+    const extractArgs = flags.markdown
+      ? ["--format", "markdown", targetFile]
+      : isHwpx
+        ? ["--inspect", targetFile]
+        : ["--inspect", "--with-cell-text", targetFile];
+    const res = await runNodeScript(path.join(CLAW_SCRIPTS_DIR, "extract_text.js"), extractArgs);
     if (res.code !== 0) {
       throw new Error(res.stderr || "extract_text failed");
     }
-    if (modeFlag === "--json" && isHwpx) {
+    if (!flags.markdown && isHwpx) {
       const parsed = JSON.parse(res.stdout);
       parsed.tablesHierarchy = await parseHwpxTablesHierarchy(fs.readFileSync(targetFile));
       console.log(JSON.stringify(parsed, null, 2));

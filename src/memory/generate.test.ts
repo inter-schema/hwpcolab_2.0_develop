@@ -1,20 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { generateMemory } from "./generate.ts";
-import type { ProviderConfig } from "../services/agent/types.ts";
+import type { MemoryGeneratorConfig } from "./types.ts";
 
-vi.mock("../services/agent/adapters/index.ts", () => {
-  return {
-    createProviderAdapter: vi.fn(),
-  };
-});
-
-import { createProviderAdapter } from "../services/agent/adapters/index.ts";
-
-const mockProvider: ProviderConfig = {
-  provider: "custom",
-  apiKey: "test-key",
-  model: "test-model",
-  endpoint: "http://127.0.0.1:11434/v1/chat/completions",
+const mockProvider: MemoryGeneratorConfig = {
+  provider: "local",
 };
 
 describe("src/memory/generate", () => {
@@ -40,12 +29,11 @@ describe("src/memory/generate", () => {
     );
   });
 
-  it("pre-redacts input PII before passing to LLM and re-redacts any leaked PII from LLM output", async () => {
+  it("pre-redacts input PII before passing to turn handler and re-redacts any leaked PII from output", async () => {
     let capturedUserPrompt = "";
 
     const mockTurn = vi.fn().mockImplementation(async (req) => {
       capturedUserPrompt = req.messages[0].content;
-      // LLM deliberately echoes leaked PII
       return {
         content: `## 문서 유형·양식
 - 공문서 양식 (담당자: 강감찬)
@@ -67,14 +55,7 @@ describe("src/memory/generate", () => {
 
 ## 예시 문구(일반화됨)
 - 환불 계좌: 123-456-789012`,
-        toolCalls: [],
       };
-    });
-
-    (createProviderAdapter as any).mockReturnValue({
-      id: "custom",
-      supportsTools: true,
-      turn: mockTurn,
     });
 
     const rawInputDoc = {
@@ -85,10 +66,13 @@ describe("src/memory/generate", () => {
     const result = await generateMemory({
       name: "공문서 스타일",
       docs: [rawInputDoc],
-      provider: mockProvider,
+      provider: {
+        ...mockProvider,
+        turn: mockTurn,
+      },
     });
 
-    // 1. Verify that LLM received NO raw PII and NO [[PII_*]] tokens
+    // 1. Verify that turn handler received NO raw PII and NO [[PII_*]] tokens
     expect(capturedUserPrompt).not.toContain("홍길동");
     expect(capturedUserPrompt).not.toContain("900101-1234567");
     expect(capturedUserPrompt).not.toContain("010-1234-5678");
@@ -99,7 +83,7 @@ describe("src/memory/generate", () => {
     expect(capturedUserPrompt).toContain("<전화번호>");
     expect(capturedUserPrompt).toContain("<이메일>");
 
-    // 2. Verify that leaked PII from LLM response was re-redacted to permanent placeholders
+    // 2. Verify that leaked PII from response was re-redacted to permanent placeholders
     expect(result.doc.body).not.toContain("강감찬");
     expect(result.doc.body).not.toContain("010-9999-8888");
     expect(result.doc.body).not.toContain("123-456-789012");
@@ -120,31 +104,6 @@ describe("src/memory/generate", () => {
   });
 
   it("enforces document count cap (10 docs) and character budget (30k/80k)", async () => {
-    const mockTurn = vi.fn().mockResolvedValue({
-      content: `## 문서 유형·양식
-- 기본
-## 어투·문체
-- 기본
-## 용어·표기
-- 기본
-## 서식·표 규칙
-- 기본
-## 구조(제목 체계)
-- 기본
-## 금지·지양
-- 기본
-## 예시 문구(일반화됨)
-- 기본`,
-      toolCalls: [],
-    });
-
-    (createProviderAdapter as any).mockReturnValue({
-      id: "custom",
-      supportsTools: true,
-      turn: mockTurn,
-    });
-
-    // 12 docs
     const manyDocs = Array.from({ length: 12 }, (_, i) => ({
       name: `doc_${i + 1}.txt`,
       text: `문서 ${i + 1} 본문 내용입니다.`,

@@ -141,3 +141,161 @@ export function calculateBodyTextSelection(
     })),
   };
 }
+
+export interface HopSelectionContext {
+  cursorPosition?: {
+    sectionIndex?: number;
+    paragraphIndex?: number;
+    charOffset?: number;
+    parentParaIndex?: number;
+    controlIndex?: number;
+    cellIndex?: number;
+    cellParaIndex?: number;
+  } | null;
+  selectionRange?: {
+    start?: {
+      sectionIndex?: number;
+      paragraphIndex?: number;
+      charOffset?: number;
+      parentParaIndex?: number;
+      controlIndex?: number;
+      cellIndex?: number;
+    };
+    end?: {
+      sectionIndex?: number;
+      paragraphIndex?: number;
+      charOffset?: number;
+      parentParaIndex?: number;
+      controlIndex?: number;
+      cellIndex?: number;
+    };
+  } | null;
+  selectedText?: string;
+  cellSelectionIndices?: number[];
+  tableLocation?: {
+    sectionIndex?: number;
+    parentParaIndex?: number;
+    controlIndex?: number;
+    row?: number;
+    col?: number;
+    startRow?: number;
+    startCol?: number;
+    endRow?: number;
+    endCol?: number;
+  } | null;
+  isActive?: boolean;
+}
+
+export function mapSelectionFromHopContext(
+  ctx: HopSelectionContext | null | undefined,
+  tablesMeta: TableCoordinateMeta[]
+): SelectionTarget | null {
+  if (!ctx) return null;
+
+  const pos = ctx.cursorPosition;
+  const tblLoc = ctx.tableLocation;
+
+  // 1. Table cell cursor or cell-block selection
+  if (
+    tblLoc ||
+    (pos && pos.parentParaIndex !== undefined && pos.controlIndex !== undefined && pos.cellIndex !== undefined)
+  ) {
+    const sec = tblLoc?.sectionIndex ?? pos?.sectionIndex ?? 0;
+    const para = tblLoc?.parentParaIndex ?? pos?.parentParaIndex ?? 0;
+    const ctrl = tblLoc?.controlIndex ?? pos?.controlIndex ?? 0;
+    const cellIdx = pos?.cellIndex ?? ctx.cellSelectionIndices?.[0] ?? 0;
+
+    const matchedTableIdx = tablesMeta.findIndex(
+      (t) => t.sec === sec && t.para === para && t.ctrl === ctrl
+    );
+    const tableIndex = matchedTableIdx >= 0 ? matchedTableIdx : 0;
+    const tableMeta = tablesMeta[tableIndex];
+
+    const matchedCell = tableMeta?.cells.find((c) => c.idx === cellIdx);
+    const startRow = tblLoc?.startRow ?? tblLoc?.row ?? matchedCell?.row ?? 0;
+    const startCol = tblLoc?.startCol ?? tblLoc?.col ?? matchedCell?.col ?? 0;
+    const endRow = tblLoc?.endRow ?? startRow;
+    const endCol = tblLoc?.endCol ?? startCol;
+
+    const selectedCells = (tableMeta?.cells || [])
+      .filter((c) => c.row >= startRow && c.row <= endRow && c.col >= startCol && c.col <= endCol)
+      .map((c) => ({
+        cellIdx: c.idx,
+        row: c.row,
+        col: c.col,
+        text: c.text,
+        bbox:
+          c.bbox || {
+            cellIdx: c.idx,
+            row: c.row,
+            col: c.col,
+            rowSpan: c.rowSpan ?? 1,
+            colSpan: c.colSpan ?? 1,
+            pageIndex: 0,
+            x: 0,
+            y: 0,
+            w: 80,
+            h: 24,
+          },
+      }));
+
+    if (selectedCells.length === 0) {
+      selectedCells.push({
+        cellIdx,
+        row: startRow,
+        col: startCol,
+        text: ctx.selectedText || matchedCell?.text || "",
+        bbox: {
+          cellIdx,
+          row: startRow,
+          col: startCol,
+          rowSpan: 1,
+          colSpan: 1,
+          pageIndex: 0,
+          x: 0,
+          y: 0,
+          w: 80,
+          h: 24,
+        },
+      });
+    }
+
+    return {
+      kind: "table_cells",
+      tableIndex,
+      sec,
+      para,
+      ctrl,
+      startRow,
+      startCol,
+      endRow,
+      endCol,
+      selectedCells,
+      unionRect: {
+        pageIndex: selectedCells[0].bbox.pageIndex,
+        x: selectedCells[0].bbox.x,
+        y: selectedCells[0].bbox.y,
+        width: selectedCells[0].bbox.w,
+        height: selectedCells[0].bbox.h,
+      },
+    };
+  }
+
+  // 2. Non-empty body text selection
+  const selectedText = (ctx.selectedText || "").trim();
+  const range = ctx.selectionRange;
+  if (selectedText && range?.start && range?.end) {
+    return {
+      kind: "body_range",
+      sec: range.start.sectionIndex ?? 0,
+      startPara: range.start.paragraphIndex ?? 0,
+      startOffset: range.start.charOffset ?? 0,
+      endPara: range.end.paragraphIndex ?? range.start.paragraphIndex ?? 0,
+      endOffset: range.end.charOffset ?? 0,
+      selectedText,
+      rects: [],
+    };
+  }
+
+  return null;
+}

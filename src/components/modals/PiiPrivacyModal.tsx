@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { useDocStore } from "../../store/useDocStore";
 import {
   ShieldCheck,
@@ -23,6 +23,15 @@ export const PiiPrivacyModal: React.FC = () => {
     clearExcludedRegions,
     sessionMasker,
   } = useDocStore();
+
+  useEffect(() => {
+    if (!piiModalOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPiiModalOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [piiModalOpen, setPiiModalOpen]);
 
   if (!piiModalOpen) return null;
 
@@ -64,6 +73,8 @@ export const PiiPrivacyModal: React.FC = () => {
           </div>
           <button
             type="button"
+            aria-label="닫기"
+            title="닫기"
             onClick={() => setPiiModalOpen(false)}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
           >

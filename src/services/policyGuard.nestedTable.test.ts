@@ -177,6 +177,7 @@ describe("Stream A: PolicyGuard - insert_nested_table", () => {
         {
           id: "ex1",
           targetType: "cell",
+          label: "표1 (2행 2열)",
           tableIndex: 0,
           row: 1,
           col: 1,

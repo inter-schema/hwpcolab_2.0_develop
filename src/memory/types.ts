@@ -1,5 +1,3 @@
-import type { ProviderConfig } from "../services/agent/types.ts";
-
 export const FIXED_MEMORY_SECTIONS = [
   "문서 유형·양식",
   "어투·문체",
@@ -91,11 +89,25 @@ export interface GenerateMemoryInputDoc {
   text: string;
 }
 
+export interface MemoryTurnRequest {
+  systemPrompt: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  signal?: AbortSignal;
+}
+
+export interface MemoryGeneratorConfig {
+  provider?: string;
+  apiKey?: string;
+  model?: string;
+  endpoint?: string;
+  turn?: (req: MemoryTurnRequest) => Promise<{ content: string }>;
+}
+
 export interface GenerateMemoryArgs {
   name: string;
   description?: string;
   docs: GenerateMemoryInputDoc[];
-  provider: ProviderConfig;
+  provider?: MemoryGeneratorConfig;
   signal?: AbortSignal;
 }
 
@@ -110,7 +122,7 @@ export interface ProposeRefinementArgs {
   doc: MemoryDoc;
   instruction?: string;
   extraDocs?: GenerateMemoryInputDoc[];
-  provider: ProviderConfig;
+  provider?: MemoryGeneratorConfig;
   signal?: AbortSignal;
 }
 

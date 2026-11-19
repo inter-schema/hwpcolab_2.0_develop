@@ -8,7 +8,8 @@ import { OpTranslator } from "../core/opTranslator";
 import { buildTablesMetaForHwpx, mapInspectedTables } from "../core/hwpxTableIndex";
 import { ParsedAttachment } from "../core/multiFileParser";
 import { PrivacySessionMasker } from "../core/privacyMasker";
-import type { ProviderId, AgentLoopMode } from "../services/agent/types";
+import { mapSelectionFromHopContext } from "../core/hitTestSelection";
+import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate";
 import type { MemoryMeta } from "../memory/index.ts";
 import { createMemoryStore, buildMemoryContext } from "../memory/index.ts";
 import { compareDocuments } from "@/compare/diff-engine";
@@ -16,10 +17,25 @@ import type { CompareSession, DiffKind } from "@/compare/types";
 
 export { type DiffItem };
 
-export type CliPresetId = "claude" | "gemini" | "codex" | "hwp-shell";
+export type ProviderId = string;
+export type AgentLoopMode = "legacy" | "v2";
+export type CliPresetId = "claude" | "gemini" | "codex" | "hwp-shell" | string;
+
+export interface CustomCliPreset {
+  id: string;
+  label: string;
+  commandPrefix: string;
+}
+
+export interface CliTerminalTab {
+  id: string;
+  title: string;
+  preset: CliPresetId;
+}
 
 export interface CliTerminalLogEntry {
   id: string;
+  tabId?: string;
   timestamp: number;
   command: string;
   stdout: string;
@@ -77,10 +93,14 @@ interface DocState {
   cliPanelWidth: number;
   cliPanelHeight: number;
   activeCliPreset: CliPresetId;
+  customCliPresets: CustomCliPreset[];
+  cliTabs: CliTerminalTab[];
+  activeCliTabId: string;
   cliHistory: CliTerminalLogEntry[];
   cliRunning: boolean;
   writingMemoryFilePath: string | null;
   selectionContextPath: string | null;
+  toastMessage: string | null;
 
   // Legacy aliases kept for backwards test compatibility
   sidebarOpen: boolean;
@@ -114,9 +134,16 @@ interface DocState {
   setCliPanelWidth: (width: number) => void;
   setCliPanelHeight: (height: number) => void;
   setActiveCliPreset: (preset: CliPresetId) => void;
+  addCustomCliPreset: (label: string, commandPrefix: string) => void;
+  removeCustomCliPreset: (id: string) => void;
+  addCliTab: (preset?: CliPresetId) => void;
+  closeCliTab: (tabId: string) => void;
+  setActiveCliTab: (tabId: string) => void;
   clearCliHistory: () => void;
   runCliCommand: (command: string, preset?: CliPresetId) => Promise<CliTerminalLogEntry>;
   syncWritingMemoryFileToDisk: () => Promise<string | null>;
+  syncWritingMemoryEnvFile: () => Promise<string | null>;
+  showToastMessage: (msg: string | null) => void;
   checkExternalStagingModification: (forceCompare?: boolean) => Promise<boolean>;
   acceptStagingDiff: () => Promise<void>;
   rejectStagingDiff: () => Promise<void>;
@@ -160,6 +187,7 @@ interface DocState {
     rows: number,
     cols: number
   ) => Promise<void>;
+  insertNestedTableAtCurrentCell: (rows: number, cols: number) => Promise<boolean>;
   setAutoMaskPii: (autoMask: boolean) => void;
   toggleExcludeSelection: () => void;
   removeExcludedRegion: (id: string) => void;
@@ -240,10 +268,22 @@ export const useDocStore = create<DocState>((set, get) => ({
     (typeof localStorage !== "undefined" &&
       (localStorage.getItem("hop_cli_preset") as CliPresetId)) ||
     "claude",
+  customCliPresets: (() => {
+    if (typeof localStorage === "undefined") return [];
+    try {
+      const raw = localStorage.getItem("hop_custom_cli_presets_v2");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  })(),
+  cliTabs: [{ id: "tab-1", title: "세션 1", preset: "claude" }],
+  activeCliTabId: "tab-1",
   cliHistory: [],
   cliRunning: false,
   writingMemoryFilePath: null,
   selectionContextPath: null,
+  toastMessage: null,
 
   sidebarOpen: true,
   sidebarDock: "right",
@@ -303,15 +343,82 @@ export const useDocStore = create<DocState>((set, get) => ({
     if (typeof localStorage !== "undefined") {
       localStorage.setItem("hop_cli_preset", activeCliPreset);
     }
-    set({ activeCliPreset });
+    set((s) => ({
+      activeCliPreset,
+      cliTabs: s.cliTabs.map((t) =>
+        t.id === s.activeCliTabId ? { ...t, preset: activeCliPreset } : t
+      ),
+    }));
   },
-  clearCliHistory: () => set({ cliHistory: [] }),
+  addCustomCliPreset: (label, commandPrefix) => {
+    const trimmedLabel = label.trim();
+    const trimmedCmd = commandPrefix.trim();
+    if (!trimmedLabel || !trimmedCmd) return;
+    const newPreset: CustomCliPreset = {
+      id: `custom-${Date.now()}`,
+      label: trimmedLabel,
+      commandPrefix: trimmedCmd,
+    };
+    const next = [...get().customCliPresets, newPreset];
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("hop_custom_cli_presets_v2", JSON.stringify(next));
+    }
+    set({ customCliPresets: next, activeCliPreset: newPreset.id });
+  },
+  removeCustomCliPreset: (id) => {
+    const next = get().customCliPresets.filter((p) => p.id !== id);
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("hop_custom_cli_presets_v2", JSON.stringify(next));
+    }
+    set((s) => ({
+      customCliPresets: next,
+      activeCliPreset: s.activeCliPreset === id ? "claude" : s.activeCliPreset,
+    }));
+  },
+  addCliTab: (preset) => {
+    const usedPreset = preset || get().activeCliPreset;
+    const nextIdx = get().cliTabs.length + 1;
+    const newTab: CliTerminalTab = {
+      id: `tab-${Date.now()}`,
+      title: `세션 ${nextIdx}`,
+      preset: usedPreset,
+    };
+    set((s) => ({
+      cliTabs: [...s.cliTabs, newTab],
+      activeCliTabId: newTab.id,
+      activeCliPreset: usedPreset,
+    }));
+  },
+  closeCliTab: (tabId) => {
+    const { cliTabs, activeCliTabId } = get();
+    if (cliTabs.length <= 1) return;
+    const remaining = cliTabs.filter((t) => t.id !== tabId);
+    const nextActive =
+      activeCliTabId === tabId ? remaining[remaining.length - 1] : remaining.find((t) => t.id === activeCliTabId) || remaining[0];
+    set((s) => ({
+      cliTabs: remaining,
+      activeCliTabId: nextActive.id,
+      activeCliPreset: nextActive.preset,
+      cliHistory: s.cliHistory.filter((h) => h.tabId !== tabId),
+    }));
+  },
+  setActiveCliTab: (tabId) => {
+    const target = get().cliTabs.find((t) => t.id === tabId);
+    if (!target) return;
+    set({ activeCliTabId: tabId, activeCliPreset: target.preset });
+  },
+  clearCliHistory: () =>
+    set((s) => ({
+      cliHistory: s.cliHistory.filter((h) => h.tabId && h.tabId !== s.activeCliTabId),
+    })),
+  showToastMessage: (toastMessage) => set({ toastMessage }),
+  syncWritingMemoryEnvFile: async () => get().syncWritingMemoryFileToDisk(),
 
   syncWritingMemoryFileToDisk: async () => {
     try {
       const store = createMemoryStore();
       const { activeMemoryIds } = get();
-      const activeDocs = [];
+      const activeDocs: any[] = [];
       for (const id of activeMemoryIds) {
         const doc = await store.get(id);
         if (doc) activeDocs.push(doc);
@@ -371,6 +478,7 @@ export const useDocStore = create<DocState>((set, get) => ({
 
       const entry: CliTerminalLogEntry = {
         id: crypto.randomUUID(),
+        tabId: get().activeCliTabId,
         timestamp: Date.now(),
         command: trimmed,
         stdout: res.stdout || "",
@@ -464,7 +572,7 @@ export const useDocStore = create<DocState>((set, get) => ({
   },
 
   acceptStagingDiff: async () => {
-    const { stagingPath, stagingDiffBytes, fileBytes, undoHistoryBytes, fileName } = get();
+    const { stagingPath, stagingDiffBytes, fileBytes, undoHistoryBytes, fileName, sessionMasker } = get();
     if (!stagingDiffBytes) {
       set({ stagingDiffSession: null, stagingDiffBytes: null });
       return;
@@ -477,9 +585,42 @@ export const useDocStore = create<DocState>((set, get) => ({
       stagingDiffBytes[2] === 0x03 &&
       stagingDiffBytes[3] === 0x04;
 
+    let finalBytes = stagingDiffBytes;
+
+    // If PII masking tokens exist in the session, restore any [[PII_*]] tokens inside HWPX XML sections
+    if (isHwpx && sessionMasker.getTokenMap().length > 0) {
+      try {
+        const unzipped = unzipSync(stagingDiffBytes);
+        let modifiedAny = false;
+        for (const key of Object.keys(unzipped)) {
+          if (/^Contents\/section\d+\.xml$/i.test(key)) {
+            const xml = strFromU8(unzipped[key]);
+            if (xml.includes("[[PII_")) {
+              const restored = sessionMasker.unmaskText(xml);
+              if (restored !== xml) {
+                unzipped[key] = strToU8(restored);
+                modifiedAny = true;
+              }
+            }
+          }
+        }
+        if (modifiedAny) {
+          finalBytes = zipSync(unzipped, { level: 6 });
+          if (stagingPath) {
+            await invoke("write_file_bytes", {
+              filePath: stagingPath,
+              bytes: Array.from(finalBytes),
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("[DocStore] PII unmasking on diff accept skipped:", err);
+      }
+    }
+
     set({
-      fileBytes: stagingDiffBytes,
-      baselineBytes: stagingDiffBytes,
+      fileBytes: finalBytes,
+      baselineBytes: finalBytes,
       isHwpx,
       isDirty: true,
       isHopDirectDirty: false,
@@ -494,7 +635,7 @@ export const useDocStore = create<DocState>((set, get) => ({
     const savedScrollTop = scrollContainer?.scrollTop ?? 0;
     const savedScrollLeft = scrollContainer?.scrollLeft ?? 0;
 
-    await hopBridge.loadDocumentIntoHop(stagingDiffBytes, fileName);
+    await hopBridge.loadDocumentIntoHop(finalBytes, fileName);
     const rt = hopBridge.getRuntime();
     if (rt) {
       set({ pageCount: Math.max(1, rt.wasm.pageCount) });
@@ -1157,6 +1298,39 @@ export const useDocStore = create<DocState>((set, get) => ({
     });
     await hopBridge.loadDocumentIntoHop(updatedBytes, fileName);
     await get().refreshDocMarkdown();
+  },
+
+  insertNestedTableAtCurrentCell: async (rows: number, cols: number) => {
+    try {
+      let currentSelection = get().selection;
+      if (!currentSelection || currentSelection.kind !== "table_cells") {
+        const ctx = hopBridge.getSelectionContext();
+        if (ctx) {
+          currentSelection = mapSelectionFromHopContext(ctx, get().tablesMeta);
+          if (currentSelection) {
+            set({ selection: currentSelection });
+          }
+        }
+      }
+      if (!currentSelection || currentSelection.kind !== "table_cells") {
+        get().showToastMessage("중첩 표를 삽입할 표 셀 내부에 먼저 커서를 위치시켜 주세요.");
+        return false;
+      }
+      await get().applyHumanNestedTableInsert(
+        currentSelection.tableIndex,
+        currentSelection.startRow,
+        currentSelection.startCol,
+        rows,
+        cols
+      );
+      get().showToastMessage(
+        `표 #${currentSelection.tableIndex + 1} (${currentSelection.startRow + 1}행 ${currentSelection.startCol + 1}열) 내부에 ${rows}×${cols} 중첩 표가 삽입되었습니다.`
+      );
+      return true;
+    } catch (err: any) {
+      get().showToastMessage(String(err?.message || err));
+      return false;
+    }
   },
 
   applyHumanParagraphEdit: async (sec: number, para: number, newText: string, oldText: string) => {

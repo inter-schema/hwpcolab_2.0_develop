@@ -165,15 +165,15 @@ export function createMemoryStore(storage?: Storage): MemoryStore {
       );
 
       // 인덱스 갱신
-      const indexList = await this.list();
-      const existingIdx = indexList.findIndex((m) => m.id === docToSave.meta.id);
+      const indexList: MemoryMeta[] = await this.list();
+      const existingIdx = indexList.findIndex((m: MemoryMeta) => m.id === docToSave.meta.id);
       if (existingIdx >= 0) {
         indexList[existingIdx] = docToSave.meta;
       } else {
         indexList.push(docToSave.meta);
       }
       indexList.sort(
-        (a, b) =>
+        (a: MemoryMeta, b: MemoryMeta) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
       );
       safeSetItem(resolvedStorage, MEM_INDEX_KEY, JSON.stringify(indexList));
@@ -193,8 +193,8 @@ export function createMemoryStore(storage?: Storage): MemoryStore {
       }
 
       // 인덱스에서 제거
-      const indexList = await this.list();
-      const filtered = indexList.filter((m) => m.id !== id);
+      const indexList: MemoryMeta[] = await this.list();
+      const filtered = indexList.filter((m: MemoryMeta) => m.id !== id);
       safeSetItem(resolvedStorage, MEM_INDEX_KEY, JSON.stringify(filtered));
     },
 

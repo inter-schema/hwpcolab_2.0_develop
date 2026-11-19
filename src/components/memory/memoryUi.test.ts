@@ -1,8 +1,12 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import React, { act } from "react";
+import { createRoot } from "react-dom/client";
+import { describe, it, expect, beforeEach } from "vitest";
 import { useDocStore } from "../../store/useDocStore";
 import { createMemoryStore, type MemoryDoc } from "../../memory/index.ts";
-import { HomeScreen } from "../../hop-host/ui/home-screen";
+import { HeaderToolbar } from "../header/HeaderToolbar";
+
+(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("Wave 2 Stream D2: Writing Memory UI and Store Integration Tests", () => {
   beforeEach(() => {
@@ -21,7 +25,7 @@ describe("Wave 2 Stream D2: Writing Memory UI and Store Integration Tests", () =
       expect(state.memoryModalOpen).toBe(false);
       expect(state.memoryModalInitialTab).toBe("list");
       expect(state.memoriesIndex).toEqual([]);
-      expect(state.activeMemoryIds).toEqual([]); // Must be initially empty (all off by default)
+      expect(state.activeMemoryIds).toEqual([]);
     });
 
     it("opens and closes memory modal properly", () => {
@@ -124,50 +128,46 @@ describe("Wave 2 Stream D2: Writing Memory UI and Store Integration Tests", () =
       await memStore.save(doc1, { recordRevision: false });
       await memStore.save(doc2, { recordRevision: false });
 
-      // Set active memory IDs to both docs
       useDocStore.setState({ activeMemoryIds: ["mem-del-1", "mem-del-2"] });
 
-      // Refresh index
       await useDocStore.getState().refreshMemoriesIndex();
       expect(useDocStore.getState().memoriesIndex.map((m) => m.id)).toContain("mem-del-1");
       expect(useDocStore.getState().memoriesIndex.map((m) => m.id)).toContain("mem-del-2");
       expect(useDocStore.getState().activeMemoryIds).toEqual(["mem-del-1", "mem-del-2"]);
 
-      // Now delete doc1 directly from store
       await memStore.delete("mem-del-1");
-
-      // Refresh index again
       await useDocStore.getState().refreshMemoriesIndex();
 
-      // mem-del-1 must be purged from both memoriesIndex and activeMemoryIds
       const current = useDocStore.getState();
       expect(current.memoriesIndex.map((m) => m.id)).toEqual(["mem-del-2"]);
       expect(current.activeMemoryIds).toEqual(["mem-del-2"]);
     });
   });
 
-  describe("HomeScreen button and actions integration", () => {
-    it("renders #home-writing-memory-btn and triggers openWritingMemory on click", () => {
+  describe("HeaderToolbar Writing Memory button integration", () => {
+    it("renders #btn-open-writing-memory and opens WritingMemoryModal on click", async () => {
       const container = document.createElement("div");
-      const openWritingMemoryMock = vi.fn();
+      document.body.appendChild(container);
+      const root = createRoot(container);
 
-      new HomeScreen(container, {}, {
-        openFile: vi.fn(),
-        createNewDocument: vi.fn(),
-        openWritingMemory: openWritingMemoryMock,
-        onDocumentLoaded: vi.fn(),
-        setMessage: vi.fn(),
+      await act(async () => {
+        root.render(React.createElement(HeaderToolbar));
       });
 
-      const memoryBtn = container.querySelector("#home-writing-memory-btn") as HTMLButtonElement;
+      const memoryBtn = container.querySelector("#btn-open-writing-memory") as HTMLButtonElement;
       expect(memoryBtn).not.toBeNull();
-      expect(memoryBtn.id).toBe("home-writing-memory-btn");
-      expect(memoryBtn.dataset.testid).toBe("home-writing-memory-btn");
-      expect(memoryBtn.textContent).toContain("작성 선호사항 (양식 메모리)");
-      expect(memoryBtn.textContent).toContain("사내 공문서·보고서 양식 및 문체 규칙을 분석하여 AI 메모리로 보관");
+      expect(memoryBtn.textContent).toContain("작성 메모리");
 
-      memoryBtn.click();
-      expect(openWritingMemoryMock).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        memoryBtn.click();
+      });
+
+      expect(useDocStore.getState().memoryModalOpen).toBe(true);
+
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
     });
   });
 });

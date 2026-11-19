@@ -89,7 +89,9 @@ function buildDeterministicRefinedBody(
       sections["용어·표기"] = `${sections["용어·표기"].trim()}\n- [다듬기 반영] ${instr}`;
     } else if (/금지|지양|피해/.test(instr)) {
       sections["금지·지양"] = `${sections["금지·지양"].trim()}\n- [다듬기 반영] ${instr}`;
-    } else if (/구조|제목|번호|목차/.test(instr)) {
+    } else if (/예시|문구/.test(instr)) {
+      sections["예시 문구(일반화됨)"] = `${sections["예시 문구(일반화됨)"].trim()}\n- [다듬기 반영] ${instr}`;
+    } else if (/구조|제목|번호\s*체계|목차/.test(instr)) {
       sections["구조(제목 체계)"] = `${sections["구조(제목 체계)"].trim()}\n- [다듬기 반영] ${instr}`;
     } else {
       sections["문서 유형·양식"] = `${sections["문서 유형·양식"].trim()}\n- [다듬기 반영] ${instr}`;
@@ -185,9 +187,8 @@ export async function proposeRefinement(
   }
 
   let rawRefinedContent = "";
-  if (args.provider && args.provider.apiKey && args.provider.apiKey.trim().length > 0) {
+  if (typeof args.provider?.turn === "function") {
     try {
-      const { createProviderAdapter } = await import("../services/agent/adapters/index.ts");
       const promptParts: string[] = [
         `### [현재 작성 선호사항 가이드]\n${args.doc.body}`,
       ];
@@ -204,14 +205,9 @@ export async function proposeRefinement(
         "위 내용을 종합하여 현재 가이드의 7개 섹션을 개선한 완성본 마크다운을 작성해 주십시오."
       );
       const userPrompt = promptParts.join("\n\n");
-      const adapter = createProviderAdapter(args.provider);
-      const resp = await adapter.turn({
+      const resp = await args.provider.turn({
         systemPrompt: REFINE_SYSTEM_PROMPT,
         messages: [{ role: "user", content: userPrompt }],
-        tools: [],
-        toolChoice: "none",
-        reasoningEffort: "medium",
-        timeoutMs: 180_000,
         signal: args.signal,
       });
       rawRefinedContent = resp.content || "";

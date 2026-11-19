@@ -7,6 +7,8 @@ export function isTauriEnv(): boolean {
   );
 }
 
+export const isTauriRuntime = isTauriEnv;
+
 /**
  * Tauri 데스크톱 런타임에서는 네이티브 Tauri invoke를 호출하고,
  * Vite 개발 서버 / Playwright E2E 브라우저 환경에서는 로컬 Node.js 브리지(/__hop_claw_api/*)를 호출하여

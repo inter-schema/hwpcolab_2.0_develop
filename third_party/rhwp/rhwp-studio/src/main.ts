@@ -795,33 +795,103 @@ async function initialize(): Promise<void> {
     setupEventListeners();
     setupModalFocusRestore();
     setupGlobalShortcuts();
-    // 시작 진입점은 순서를 지켜야 한다 — ?url= 로드와 자동저장 복구가 문서를 열 기회를
-    // 먼저 갖고, 아무도 열지 않았을 때만 빈 문서를 연다.
-    void (async () => {
-      await loadFromUrlParam();
-      // embed 프로파일: 자동저장 복구 다이얼로그의 드래프트 복원도 호스트가 감지할 수
-      // 없는 문서 교체 경로이므로 띄우지 않는다 (드래프트 기록 자체는 유지).
-      if (chromeMode !== 'embed') await offerAutosaveRecoveryIfIdle();
-      await openBlankDocumentIfIdle();
-    })();
-    // embed 프로파일: PWA launch queue로 문서를 넘겨받는 진입도 문서 교체 경로이므로
-    // 설치하지 않는다.
-    if (chromeMode !== 'embed') {
-      installPwaFileHandling(window as FileHandlingWindowLike, {
-        openDocumentBytes(payload) {
-          eventBus.emit('open-document-bytes', payload);
-        },
-        notifyUnsupportedFile(fileName) {
-          showLoadError(new Error(`지원하지 않는 파일 형식입니다: ${fileName}. HWP/HWPX/HML 파일만 지원합니다.`));
-        },
-        notifyError(error) {
-          showLoadErrorUnlessCancelled(error);
-        },
-        notifyMultipleFiles(count) {
-          console.warn(`[pwa-file-handling] 여러 파일(${count}개)이 전달되어 첫 번째 파일만 엽니다.`);
-        },
-      });
+    const isHopClawHosted = Boolean((window as unknown as Record<string, unknown>).__HOP_CLAW_HOSTED__);
+    if (!isHopClawHosted) {
+      // 시작 진입점은 순서를 지켜야 한다 — ?url= 로드와 자동저장 복구가 문서를 열 기회를
+      // 먼저 갖고, 아무도 열지 않았을 때만 빈 문서를 연다.
+      void (async () => {
+        await loadFromUrlParam();
+        if (chromeMode !== 'embed') await offerAutosaveRecoveryIfIdle();
+        await openBlankDocumentIfIdle();
+      })();
+      if (chromeMode !== 'embed') {
+        installPwaFileHandling(window as FileHandlingWindowLike, {
+          openDocumentBytes(payload) {
+            eventBus.emit('open-document-bytes', payload);
+          },
+          notifyUnsupportedFile(fileName) {
+            showLoadError(new Error(`지원하지 않는 파일 형식입니다: ${fileName}. HWP/HWPX/HML 파일만 지원합니다.`));
+          },
+          notifyError(error) {
+            showLoadErrorUnlessCancelled(error);
+          },
+          notifyMultipleFiles(count) {
+            console.warn(`[pwa-file-handling] 여러 파일(${count}개)이 전달되어 첫 번째 파일만 엽니다.`);
+          },
+        });
+      }
     }
+
+    let trackedFileName = '제목없음.hwpx';
+    (window as any).__HOP_STUDIO_CONTROL__ = {
+      loadBytes: async (bytes: Uint8Array, fileName: string) => {
+        trackedFileName = fileName || trackedFileName;
+        await loadBytes(bytes, fileName, null, undefined, { skipRecent: true, suppressDialogs: true });
+      },
+      exportBytes: (asHwpx: boolean): Uint8Array => {
+        return asHwpx ? wasm.exportHwpx() : wasm.exportHwp();
+      },
+      getSelectionContext: () => {
+        const ih = inputHandler as any;
+        const pos = ih?.getCursorPosition?.() ?? null;
+        const sel = ih?.getSelection?.() ?? null;
+        const cellBlock = ih?.getSelectedCellBlock?.() ?? null;
+        let selectedText = '';
+        try {
+          if (typeof ih?.getSelectedText === 'function') {
+            selectedText = ih.getSelectedText() || '';
+          } else if (sel && sel.start && sel.end && sel.start.parentParaIndex === undefined) {
+            const parts: string[] = [];
+            for (let p = sel.start.paragraphIndex; p <= sel.end.paragraphIndex; p++) {
+              const pLen = wasm.getParagraphLength(sel.start.sectionIndex, p);
+              const from = p === sel.start.paragraphIndex ? sel.start.charOffset : 0;
+              const to = p === sel.end.paragraphIndex ? sel.end.charOffset : pLen;
+              if (to > from) {
+                const slice = (wasm as any).getText?.(sel.start.sectionIndex, p, from, to - from);
+                if (slice) parts.push(slice);
+              }
+            }
+            selectedText = parts.join('\n');
+          }
+        } catch {}
+        return {
+          cursorPosition: pos,
+          selectionRange: sel,
+          selectedText,
+          cellSelectionIndices: cellBlock && typeof pos?.cellIndex === 'number' ? [pos.cellIndex] : [],
+          tableLocation: cellBlock
+            ? {
+                sectionIndex: cellBlock.sec,
+                parentParaIndex: cellBlock.ppi,
+                controlIndex: cellBlock.ci,
+                startRow: cellBlock.startRow,
+                startCol: cellBlock.startCol,
+                endRow: cellBlock.endRow,
+                endCol: cellBlock.endCol,
+              }
+            : null,
+          isActive: ih?.isActive?.() ?? false,
+        };
+      },
+      setThemeMode: (mode: 'system' | 'light' | 'dark') => {
+        setThemeMode(mode);
+      },
+      getBridge: () => wasm,
+      getCurrentFileName: () => trackedFileName,
+      refreshView: async () => {
+        await canvasView?.loadDocument();
+      },
+      getRuntimeHandle: () => ({
+        wasm,
+        canvasView,
+        inputHandler,
+        eventBus,
+        openBytesInHop: async (bytes: Uint8Array, fileName: string) => {
+          trackedFileName = fileName || trackedFileName;
+          await loadBytes(bytes, fileName, null, undefined, { skipRecent: true, suppressDialogs: true });
+        },
+      }),
+    };
 
     // E2E 테스트용 전역 노출 (개발 모드 전용)
     if (import.meta.env.DEV) {
@@ -1993,15 +2063,24 @@ function showLoadError(error: unknown): void {
   });
 }
 
-const initPromise = initialize();
-// 첫 실행이면 스킨 선택을 안내한다 (초기화 성공 후, 임베드 모드 제외).
-// initialize() 는 실패해도 내부에서 삼키고 resolve 하므로, 렌더러가 실제로
-// 준비된 경우에만 띄운다 — 실패 화면 위에 안내가 겹치고 1회성 플래그가
-// 소모되는 것을 막는다.
-void initPromise.then(() => {
-  if (!rendererInitialized) return;
-  maybeShowSkinOnboarding();
-});
+let bootPromise: Promise<void> | null = null;
+
+export function bootHopStudio(): Promise<void> {
+  if (!bootPromise) {
+    (window as unknown as Record<string, unknown>).__HOP_CLAW_HOSTED__ = true;
+    bootPromise = initialize();
+  }
+  return bootPromise;
+}
+
+const initPromise = {
+  then<TResult1 = void, TResult2 = never>(
+    onfulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+  ): Promise<TResult1 | TResult2> {
+    return bootHopStudio().then(onfulfilled, onrejected);
+  },
+};
 
 installEmbedRuntime({
   hostWindow: window,

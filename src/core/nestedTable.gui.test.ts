@@ -11,7 +11,6 @@ import { useDocStore } from "../store/useDocStore.ts";
 import * as runtimeInvokeModule from "./runtimeInvoke.ts";
 import { hopBridge } from "./hopBridge.ts";
 import { parseHwpxTablesFromBytes } from "./hwpxTableIndex.ts";
-import { InlineQuickToolbar } from "../components/floating/InlineQuickToolbar";
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -52,7 +51,6 @@ describe("Nested Table GUI & Store Integration (nestedTable.gui.test.ts)", () =>
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(hopBridge, "loadDocumentIntoHop").mockResolvedValue(undefined);
-    window.alert = vi.fn();
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nested-gui-test-"));
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -123,7 +121,7 @@ describe("Nested Table GUI & Store Integration (nestedTable.gui.test.ts)", () =>
       isHwpx: true,
       fileBytes: initialBytes,
       undoHistoryBytes: [],
-      tablesMeta: initialTables,
+      tablesMeta: initialTables.map((t) => ({ ...t, sec: 0, para: 0, ctrl: 0 })),
     });
 
     // Execute human nested table insertion: 2x2 nested table inside Table 0, Row 8, Col 1
@@ -172,74 +170,42 @@ describe("Nested Table GUI & Store Integration (nestedTable.gui.test.ts)", () =>
     expect(tablesAfterUndo[0].depth).toBe(0);
   });
 
-  it("3. InlineQuickToolbar renders '표 안에 표' button for table selection and calls applyHumanNestedTableInsert", async () => {
+  it("3. Unified [표 만들기] insertNestedTableAtCurrentCell delegates to applyHumanNestedTableInsert for selected table cell", async () => {
+    const originalApply = useDocStore.getState().applyHumanNestedTableInsert;
     const applySpy = vi.fn().mockResolvedValue(undefined);
 
-    useDocStore.setState({
-      isHwpx: true,
-      selection: {
-        kind: "table_cells",
-        tableIndex: 0,
-        sec: 0,
-        para: 1,
-        ctrl: 0,
-        startRow: 1,
-        startCol: 1,
-        endRow: 1,
-        endCol: 1,
-        selectedCells: [{ cellIdx: 0, row: 1, col: 1, text: "cell" }],
-      },
-      applyHumanNestedTableInsert: applySpy,
-    });
+    try {
+      useDocStore.setState({
+        isHwpx: true,
+        selection: {
+          kind: "table_cells",
+          tableIndex: 0,
+          sec: 0,
+          para: 1,
+          ctrl: 0,
+          startRow: 1,
+          startCol: 1,
+          endRow: 1,
+          endCol: 1,
+          selectedCells: [{ cellIdx: 0, row: 1, col: 1, text: "cell", bbox: { cellIdx: 0, row: 1, col: 1, rowSpan: 1, colSpan: 1, pageIndex: 0, x: 0, y: 0, w: 80, h: 24 } }],
+          unionRect: { pageIndex: 0, x: 0, y: 0, width: 80, height: 24 },
+        },
+        applyHumanNestedTableInsert: applySpy,
+      });
 
-    await act(async () => {
-      root.render(React.createElement(InlineQuickToolbar, { position: { x: 300, y: 300 } }));
-    });
+      await useDocStore.getState().insertNestedTableAtCurrentCell(3, 4);
 
-    const button = container.querySelector("#quick-btn-nested-table") as HTMLButtonElement;
-    expect(button).not.toBeNull();
-    expect(button.textContent).toContain("표 안에 표");
-
-    // Click to open modal
-    await act(async () => {
-      button.click();
-    });
-
-    const modal = container.querySelector("#nested-table-modal");
-    expect(modal).not.toBeNull();
-
-    const rowsInput = container.querySelector("#nested-table-rows") as HTMLInputElement;
-    const colsInput = container.querySelector("#nested-table-cols") as HTMLInputElement;
-    expect(rowsInput.value).toBe("2");
-    expect(colsInput.value).toBe("2");
-
-    // Change row and col values
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype,
-      "value"
-    )?.set;
-
-    await act(async () => {
-      nativeInputValueSetter?.call(rowsInput, "3");
-      rowsInput.dispatchEvent(new Event("change", { bubbles: true }));
-
-      nativeInputValueSetter?.call(colsInput, "4");
-      colsInput.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-
-    const confirmBtn = container.querySelector("#nested-table-confirm") as HTMLButtonElement;
-    await act(async () => {
-      confirmBtn.click();
-    });
-
-    expect(applySpy).toHaveBeenCalledWith(0, 1, 1, 3, 4);
+      expect(applySpy).toHaveBeenCalledWith(0, 1, 1, 3, 4);
+    } finally {
+      useDocStore.setState({ applyHumanNestedTableInsert: originalApply });
+    }
   });
 
-  it("4. InlineQuickToolbar alerts when clicked on non-HWPX file", async () => {
-    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
-
+  it("4. Unified [표 만들기] insertNestedTableAtCurrentCell emits non-blocking toast message when clicked on non-HWPX file", async () => {
     useDocStore.setState({
+      stagingPath: "mock/file.hwp",
       isHwpx: false,
+      toastMessage: null,
       selection: {
         kind: "table_cells",
         tableIndex: 0,
@@ -250,23 +216,13 @@ describe("Nested Table GUI & Store Integration (nestedTable.gui.test.ts)", () =>
         startCol: 0,
         endRow: 0,
         endCol: 0,
-        selectedCells: [{ cellIdx: 0, row: 0, col: 0, text: "" }],
+        selectedCells: [{ cellIdx: 0, row: 0, col: 0, text: "", bbox: { cellIdx: 0, row: 0, col: 0, rowSpan: 1, colSpan: 1, pageIndex: 0, x: 0, y: 0, w: 80, h: 24 } }],
+        unionRect: { pageIndex: 0, x: 0, y: 0, width: 80, height: 24 },
       },
     });
 
-    await act(async () => {
-      root.render(React.createElement(InlineQuickToolbar, { position: { x: 300, y: 300 } }));
-    });
+    await useDocStore.getState().insertNestedTableAtCurrentCell(2, 2);
 
-    const button = container.querySelector("#quick-btn-nested-table") as HTMLButtonElement;
-    expect(button).not.toBeNull();
-
-    await act(async () => {
-      button.click();
-    });
-
-    expect(alertSpy).toHaveBeenCalledWith(
-      expect.stringContaining("HWPX")
-    );
+    expect(useDocStore.getState().toastMessage).toContain("HWPX");
   });
 });

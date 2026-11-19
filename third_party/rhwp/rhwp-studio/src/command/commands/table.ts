@@ -322,12 +322,25 @@ function applyTableDeleteRowColumn(
 export const tableCommands: CommandDef[] = [
   { id: 'table:create', label: t('command.table.create.label'), icon: 'icon-table',
     opensDialog: true,
-    canExecute: (ctx) => ctx.hasDocument && !ctx.inTable,
+    canExecute: (ctx) => ctx.hasDocument,
     execute(services, params) {
       const ih = services.getInputHandler();
       if (!ih) return;
       const pos = ih.getCursorPosition();
-      if (pos.parentParaIndex !== undefined) return;
+      const inCellContext = pos.parentParaIndex !== undefined || ih.isInCellSelectionMode?.() === true;
+      if (inCellContext) {
+        const insertHook = (globalThis as Record<string, unknown>).__HOP_CLAW_INSERT_NESTED_TABLE__ as
+          | ((opts: { rows: number; cols: number }) => Promise<boolean>)
+          | undefined;
+        if (typeof insertHook !== 'function') return;
+        const dialog = new TableCreateDialog();
+        dialog.onApply = (rows, cols) => {
+          void insertHook({ rows, cols });
+          (ih as any).textarea?.focus();
+        };
+        dialog.show(params?.anchorEl as HTMLElement | undefined);
+        return;
+      }
       const dialog = new TableCreateDialog();
       dialog.onApply = (rows, cols, options?: TableCreateOptions) => {
         const ih2 = services.getInputHandler();

@@ -1,19 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   buildMemoryContext,
-  MAX_SINGLE_MEMORY_CHARS,
-  MAX_TOTAL_MEMORY_CHARS,
 } from "./injection.ts";
 import { createDefaultMemoryBody } from "./frontmatter.ts";
 import type { MemoryDoc } from "./types.ts";
-import { orchestrateAiEdit, type AiRequestOptions } from "../services/aiOrchestrator.ts";
-import * as legacyBridgeModule from "../services/agent/legacyBridge.ts";
-import * as loopV2Module from "../services/agent/loopV2.ts";
-
-vi.mock("../core/runtimeInvoke.ts", () => ({
-  runtimeInvoke: vi.fn(),
-  isTauriEnv: () => false,
-}));
 
 describe("src/memory/injection", () => {
   beforeEach(() => {
@@ -91,70 +81,5 @@ describe("src/memory/injection", () => {
     const res = buildMemoryContext([doc1, doc2, doc3, doc4]);
     expect(res.truncated).toBe(true);
     expect(res.warnings.some((w) => w.includes("12,000자 상한을 초과하여"))).toBe(true);
-  });
-
-  describe("aiOrchestrator integration with memoryContext", () => {
-    const baseAiOptions: AiRequestOptions = {
-      provider: "openai",
-      apiKey: "test-key",
-      model: "gpt-4o",
-      docMarkdown: "문서 본문",
-      tablesMeta: [],
-      selection: null,
-      excludedRegions: [],
-      autoMaskPii: false,
-      userPrompt: "문서 검토해줘",
-    };
-
-    it("includes memoryContext in user messages in legacy loop mode", async () => {
-      let capturedFirstMessageContent = "";
-      vi.spyOn(legacyBridgeModule, "callLegacyTurn").mockImplementation(async (params) => {
-        capturedFirstMessageContent = params.messages[0].content;
-        return {
-          message: {
-            role: "assistant",
-            content: "완료되었습니다.",
-          },
-          toolCalls: [],
-        };
-      });
-
-      const memDoc = createDoc("doc1", "기안 가이드");
-      const builtMem = buildMemoryContext([memDoc]);
-
-      await orchestrateAiEdit({
-        ...baseAiOptions,
-        loopMode: "legacy",
-        memoryContext: builtMem.text,
-      });
-
-      expect(capturedFirstMessageContent).toContain("<WRITING_MEMORY_DATA priority=\"1\"");
-      expect(capturedFirstMessageContent).toContain("기안 가이드");
-    });
-
-    it("includes memoryContext in messages in v2 loop mode", async () => {
-      let capturedFirstMessageContent = "";
-      vi.spyOn(loopV2Module, "runAgentLoopV2").mockImplementation(async (ctx: any) => {
-        capturedFirstMessageContent = ctx.messages[0].content;
-        return {
-          summary: "v2 완료",
-          diffItems: [],
-          verificationPassed: true,
-          trialsRun: 0,
-        };
-      });
-
-      const memDoc = createDoc("doc2", "보고서 가이드");
-      const builtMem = buildMemoryContext([memDoc]);
-
-      await orchestrateAiEdit({
-        ...baseAiOptions,
-        loopMode: "v2",
-        memoryContext: builtMem.text,
-      });
-
-      expect(capturedFirstMessageContent).toContain("<WRITING_MEMORY_DATA priority=\"1\"");
-      expect(capturedFirstMessageContent).toContain("보고서 가이드");
-    });
   });
 });

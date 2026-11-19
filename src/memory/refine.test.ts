@@ -4,23 +4,10 @@ import {
   computeSectionDiffs,
   proposeRefinement,
 } from "./refine.ts";
-import { createDefaultMemoryBody } from "./frontmatter.ts";
-import type { MemoryDoc, SectionDiff } from "./types.ts";
-import type { ProviderConfig } from "../services/agent/types.ts";
+import type { MemoryDoc, MemoryGeneratorConfig } from "./types.ts";
 
-vi.mock("../services/agent/adapters/index.ts", () => {
-  return {
-    createProviderAdapter: vi.fn(),
-  };
-});
-
-import { createProviderAdapter } from "../services/agent/adapters/index.ts";
-
-const mockProvider: ProviderConfig = {
-  provider: "custom",
-  apiKey: "test-key",
-  model: "test-model",
-  endpoint: "http://127.0.0.1:11434/v1/chat/completions",
+const mockProvider: MemoryGeneratorConfig = {
+  provider: "local",
 };
 
 describe("src/memory/refine", () => {
@@ -77,7 +64,7 @@ describe("src/memory/refine", () => {
     expect(docTypeDiff!.changed).toBe(false);
   });
 
-  it("proposeRefinement pre-redacts instruction/extraDocs and re-redacts LLM output PII", async () => {
+  it("proposeRefinement pre-redacts instruction/extraDocs and re-redacts output PII", async () => {
     let capturedPrompt = "";
 
     const mockTurn = vi.fn().mockImplementation(async (req) => {
@@ -103,14 +90,7 @@ describe("src/memory/refine", () => {
 
 ## 예시 문구(일반화됨)
 - 연락처: 010-5555-6666`,
-        toolCalls: [],
       };
-    });
-
-    (createProviderAdapter as any).mockReturnValue({
-      id: "custom",
-      supportsTools: true,
-      turn: mockTurn,
     });
 
     const result = await proposeRefinement({
@@ -122,10 +102,13 @@ describe("src/memory/refine", () => {
           text: "참고인: 홍길동 계좌 110-123-456789 적용 요망",
         },
       ],
-      provider: mockProvider,
+      provider: {
+        ...mockProvider,
+        turn: mockTurn,
+      },
     });
 
-    // 1. Verify LLM received no raw PII
+    // 1. Verify turn handler received no raw PII
     expect(capturedPrompt).not.toContain("김유신");
     expect(capturedPrompt).not.toContain("010-1111-2222");
     expect(capturedPrompt).not.toContain("홍길동");
@@ -134,7 +117,7 @@ describe("src/memory/refine", () => {
     expect(capturedPrompt).toContain("<전화번호>");
     expect(capturedPrompt).toContain("<계좌번호>");
 
-    // 2. Verify leaked PII from LLM response was sanitized
+    // 2. Verify leaked PII from response was sanitized
     expect(result.proposedBody).not.toContain("이순신");
     expect(result.proposedBody).not.toContain("010-5555-6666");
     expect(result.proposedBody).toContain("<이름>");

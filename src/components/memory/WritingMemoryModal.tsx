@@ -18,7 +18,6 @@ import {
   parseMemorySections,
   serializeMemorySections,
 } from "../../memory/index.ts";
-import type { ProviderConfig } from "../../services/agent/types";
 import { MemoryDiffViewer } from "./MemoryDiffViewer";
 import {
   X,
@@ -41,6 +40,7 @@ import {
   Lightbulb,
   ChevronDown,
   ChevronUp,
+  TerminalSquare,
 } from "lucide-react";
 
 async function extractTextFromFile(file: File): Promise<string> {
@@ -55,19 +55,6 @@ async function extractTextFromFile(file: File): Promise<string> {
   }
   const parsed = await parseLocalAttachment(file.name, bytes);
   return (parsed as any).extractedMarkdown || parsed.markdownSummary || "";
-}
-
-function getProviderConfig(): ProviderConfig {
-  const s = useDocStore.getState();
-  return {
-    provider: s.provider,
-    apiKey: s.apiKey,
-    model: s.model,
-    endpoint: s.customEndpoint || undefined,
-    customName: s.customName,
-    customSupportsTools: s.customSupportsTools,
-    customSendReasoning: s.customSendReasoning,
-  };
 }
 
 export const WritingMemoryModal: React.FC = () => {
@@ -251,7 +238,6 @@ export const WritingMemoryModal: React.FC = () => {
         doc: selectedDoc,
         instruction: refineInstruction,
         extraDocs,
-        provider: getProviderConfig(),
       });
 
       setRefineDiffs(res.sectionDiffs);
@@ -448,7 +434,6 @@ export const WritingMemoryModal: React.FC = () => {
         name: createMultiName.trim(),
         description: createMultiDesc.trim(),
         docs,
-        provider: getProviderConfig(),
       });
 
       setPreviewResult(res);
@@ -482,7 +467,6 @@ export const WritingMemoryModal: React.FC = () => {
         name: createCurrentName.trim(),
         description: createCurrentDesc.trim(),
         docs: [{ name: fileName || "현재 문서", text: docMarkdown }],
-        provider: getProviderConfig(),
       });
 
       setPreviewResult(res);
@@ -1064,7 +1048,7 @@ export const WritingMemoryModal: React.FC = () => {
                                 )}
                               </div>
 
-                              <div className="pt-2">
+                              <div className="pt-2 flex flex-wrap items-center gap-2">
                                 <button
                                   type="button"
                                   id="memory-propose-refine-btn"
@@ -1080,7 +1064,34 @@ export const WritingMemoryModal: React.FC = () => {
                                   ) : (
                                     <Wand2 className="w-4 h-4" />
                                   )}
-                                  <span>수정안 생성 (Smart Diff 미리보기)</span>
+                                  <span>로컬 규칙 다듬기 (Smart Diff 미리보기)</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  id="memory-dispatch-cli-refine-btn"
+                                  onClick={async () => {
+                                    if (!selectedDoc) return;
+                                    const store = useDocStore.getState();
+                                    if (!store.activeMemoryIds.includes(selectedDoc.meta.id)) {
+                                      store.toggleActiveMemory(selectedDoc.meta.id);
+                                    }
+                                    await store.syncWritingMemoryEnvFile();
+                                    if (!store.cliPanelOpen) {
+                                      store.toggleCliPanel();
+                                    }
+                                    const instructionText =
+                                      refineInstruction.trim() ||
+                                      "공문서 어투와 표 서식 규칙을 더 명확하고 일관성 있게 정교화해 줘";
+                                    closeMemoryModal();
+                                    await store.runCliCommand(
+                                      `echo "[Writing Memory CLI 정교화 지침] 메모리(${selectedDoc.meta.name}) 파일 경로: $HWP_WRITING_MEMORY_PATH | 요청: ${instructionText.replace(/"/g, '\\"')}" && cat "$HWP_WRITING_MEMORY_PATH"`
+                                    );
+                                  }}
+                                  className="flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 transition-colors"
+                                >
+                                  <TerminalSquare className="w-4 h-4 text-teal-600" />
+                                  <span>터미널 CLI로 메모리 정교화 실행</span>
                                 </button>
                               </div>
                             </div>

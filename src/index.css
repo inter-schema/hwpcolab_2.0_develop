@@ -1,11 +1,11 @@
-@import "./hop-host/style.css";
+@import "../third_party/rhwp/rhwp-studio/src/style.css";
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, "Pretendard", "Malgun Gothic", "맑은 고딕", "Apple SD 산돌고딕 Neo", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: "Pretendard Variable", "Pretendard", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Malgun Gothic", "맑은 고딕", "Apple SD 산돌고딕 Neo", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 body {

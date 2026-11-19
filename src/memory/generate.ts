@@ -180,23 +180,17 @@ export async function generateMemory(
     );
   }
 
-  // Try provider adapter only if an explicit adapter/key is supplied (e.g. unit test mock), otherwise use local deterministic analysis
+  // Use optional custom turn handler if provided, otherwise run deterministic local heuristic analysis
   let rawGeneratedContent = "";
-  if (args.provider && args.provider.apiKey && args.provider.apiKey.trim().length > 0) {
+  if (typeof args.provider?.turn === "function") {
     try {
-      const { createProviderAdapter } = await import("../services/agent/adapters/index.ts");
       const docsText = processedDocs
         .map((d, i) => `### [문서 ${i + 1}: ${d.name}]\n${d.text}`)
         .join("\n\n");
       const userPrompt = `아래 ${processedDocs.length}개 예시 문서들의 공통 작성 스타일, 어투, 용어 표기, 서식/표 규칙, 제목 체계, 지양 표현을 분석하여 마크다운 스타일 가이드(메모리)를 작성해 주십시오.\n\n${docsText}`;
-      const adapter = createProviderAdapter(args.provider);
-      const resp = await adapter.turn({
+      const resp = await args.provider.turn({
         systemPrompt: MEMORY_GENERATION_SYSTEM_PROMPT,
         messages: [{ role: "user", content: userPrompt }],
-        tools: [],
-        toolChoice: "none",
-        reasoningEffort: "medium",
-        timeoutMs: 180_000,
         signal: args.signal,
       });
       rawGeneratedContent = resp.content || "";
