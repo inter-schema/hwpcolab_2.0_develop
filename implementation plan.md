@@ -8,7 +8,7 @@
 
 **Tech Stack:** React 19, TypeScript, Vite 6, Tauri 2, Rust/Cargo, Node.js, fflate, Vitest, GitHub Actions.
 
-**Spec:** 2026-11-20 보안 검토 결과. 기준 저장소는 \`inter-schema/hwpcolab_2.0_develop\`, 기준 브랜치는 \`main\`, 기준 커밋은 \`3fdb3bd58b77b1d6d1e3157e5d6a97e25d3807fc\`이다. 별도 설계 문서는 없으며, 이 계획이 검토 결과를 구현 가능한 단일 작업 기준으로 정리한다.
+**Spec:** 2026-11-20 보안 검토 결과. 기준 저장소는 `inter-schema/hwpcolab_2.0_develop`, 기준 브랜치는 `main`, 기준 커밋은 `3fdb3bd58b77b1d6d1e3157e5d6a97e25d3807fc`이다. 별도 설계 문서는 없으며, 이 계획이 검토 결과를 구현 가능한 단일 작업 기준으로 정리한다.
 
 ---
 
@@ -67,22 +67,22 @@
 **기간:** T0 · 2026-11-23–2026-11-24
 
 **대상 파일 및 영역**
-- 기존 테스트 구조: \`src/services/*.test.ts\`, \`src/core/*.test.ts\`, \`src-tauri/src/commands/*.rs\`
-- GitHub Actions: \`.github/workflows/beta-validation.yml\`
-- 검토 기준 커밋 및 현재 \`main\`
+- 기존 테스트 구조: `src/services/*.test.ts`, `src/core/*.test.ts`, `src-tauri/src/commands/*.rs`
+- GitHub Actions: `.github/workflows/beta-validation.yml`
+- 검토 기준 커밋 및 현재 `main`
 
 **작업**
-- [ ] 현재 \`main\`이 기준 커밋 이후 변경되었는지 확인하고, 변경된 보안 관련 파일을 다시 대조한다.
+- [ ] 현재 `main`이 기준 커밋 이후 변경되었는지 확인하고, 변경된 보안 관련 파일을 다시 대조한다.
 - [ ] npm 테스트, TypeScript 검사, 프런트엔드 빌드, Rust 포맷·Clippy·테스트의 현재 결과를 각각 기록한다.
 - [ ] 개발 API, 경로 탈출, 셸 인자, 정책 우회, 개인정보 전달, ZIP 한도를 검증할 합성 입력을 준비한다.
 - [ ] 각 테스트에서 기대하는 거부 조건과 정상 사용 조건을 함께 작성한다. 정상 경로를 막는 보안 수정은 통과로 간주하지 않는다.
 
 **검증**
-- [ ] \`npm test\`
-- [ ] \`npm run lint\`
-- [ ] \`npm run build\`
-- [ ] \`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check\`
-- [ ] \`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1\`
+- [ ] `npm test`
+- [ ] `npm run lint`
+- [ ] `npm run build`
+- [ ] `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`
+- [ ] `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
 **완료 기준:** 검토 당시의 실패와 새로 추가한 회귀 테스트 결과를 구분한 기준선 기록이 있다.
 
@@ -92,12 +92,12 @@
 **우선순위:** P0
 
 **대상 파일**
-- \`vite.config.ts\`
-- 신규 보안 경계 테스트: \`src/services/devApiSecurity.test.ts\` 또는 기존 테스트 규칙에 맞는 동등 위치
+- `vite.config.ts`
+- 신규 보안 경계 테스트: `src/services/devApiSecurity.test.ts` 또는 기존 테스트 규칙에 맞는 동등 위치
 
 **작업 1-A · 개발 서버 노출 제한**
-- [ ] Vite 서버의 기본 host를 \`127.0.0.1\` 또는 동등한 루프백 전용 설정으로 변경한다.
-- [ ] \`/__hop_claw_api/\` 요청에 대해 Host와 Origin을 검증하고, 신뢰하지 않는 출처의 요청은 실행 전에 거부한다.
+- [ ] Vite 서버의 기본 host를 `127.0.0.1` 또는 동등한 루프백 전용 설정으로 변경한다.
+- [ ] `/__hop_claw_api/` 요청에 대해 Host와 Origin을 검증하고, 신뢰하지 않는 출처의 요청은 실행 전에 거부한다.
 - [ ] 셸 실행 및 파일 읽기·쓰기 API는 신뢰된 로컬 UI의 사용자 동작에서만 도달할 수 있도록 보호한다. 필요한 경우 세션 범위의 예측 불가능한 토큰을 추가한다.
 - [ ] 네트워크 공개 모드를 추가해야 한다면 기본값과 분리하고, 명시적 설정·인증·경고를 모두 요구한다.
 - [ ] 오류 응답이나 로그에 환경변수, 명령 전체의 비밀 인자, 민감한 파일 내용이 포함되지 않는지 확인한다.
@@ -110,7 +110,7 @@
 
 **필수 회귀 테스트**
 - [ ] 루프백의 정상 요청은 허용하고, 비루프백 Host와 잘못된 Origin 요청은 거부한다.
-- [ ] \`/fonts/\`와 \`/samples/\`에서 \`..\`, 인코딩된 \`..\`, 이중 인코딩, 심볼릭 링크 경로 탈출을 차단한다.
+- [ ] `/fonts/`와 `/samples/`에서 `..`, 인코딩된 `..`, 이중 인코딩, 심볼릭 링크 경로 탈출을 차단한다.
 - [ ] 정상 폰트 및 샘플 파일 요청은 기존과 같이 성공한다.
 - [ ] 거부된 요청에서 셸 명령이나 파일 I/O가 실행되지 않았음을 확인한다.
 
@@ -122,28 +122,28 @@
 **우선순위:** P1
 
 **대상 파일**
-- \`src/components/terminal/AgentCliPanel.tsx\`
-- \`src-tauri/src/commands/claw_bridge.rs\`
-- \`src/services/policyGuard.ts\`
-- \`resources/skills/hwp-document-editor/hwp-cli.mjs\`
-- \`resources/claw-hwp/scripts/hwpx-edit.js\`
+- `src/components/terminal/AgentCliPanel.tsx`
+- `src-tauri/src/commands/claw_bridge.rs`
+- `src/services/policyGuard.ts`
+- `resources/skills/hwp-document-editor/hwp-cli.mjs`
+- `resources/claw-hwp/scripts/hwpx-edit.js`
 - 관련 테스트 파일
 
 **작업 2-A · 파일명 셸 주입 차단**
-- [ ] 참고자료 선택 후 실행되는 \`ref-extract\` 경로를 일반 터미널 명령 문자열과 분리한다.
+- [ ] 참고자료 선택 후 실행되는 `ref-extract` 경로를 일반 터미널 명령 문자열과 분리한다.
 - [ ] 실행 파일과 각 인자를 별도 인자로 전달한다. 선택된 파일 경로는 단일 데이터 인자로만 전달한다.
 - [ ] 사용자 입력 터미널 명령 기능은 유지하되, 파일 선택 결과나 내부 경로가 명령 문자열에 자동 결합되지 않게 한다.
 - [ ] Windows와 Unix 계열 실행 경로에서 동일한 인자 경계가 유지되는지 확인한다.
 
 **필수 회귀 테스트**
-- [ ] 공백, 따옴표, 한글, 세미콜론, \`$()\`, 백틱이 포함된 파일명을 실제 명령으로 실행하지 않고 파일 경로 인자로 전달한다.
+- [ ] 공백, 따옴표, 한글, 세미콜론, `$()`, 백틱이 포함된 파일명을 실제 명령으로 실행하지 않고 파일 경로 인자로 전달한다.
 - [ ] 정상적인 HWP/HWPX/DOCX/XLSX/PDF 참고자료 추출은 성공한다.
 - [ ] 사용자가 터미널에 직접 입력한 명령의 기존 동작은 별도 테스트로 확인한다.
 
 **작업 2-B · 편집 정책 우회 차단**
-- [ ] UI, \`hwp-cli\` wrapper, \`hwpx-edit.js\`, Tauri \`execute_claw_ops\`의 실제 호출 경로를 목록화한다.
+- [ ] UI, `hwp-cli` wrapper, `hwpx-edit.js`, Tauri `execute_claw_ops`의 실제 호출 경로를 목록화한다.
 - [ ] 각 진입점이 동일한 편집 정책 계약을 검사하도록 연결한다. 단순히 wrapper에 검사를 추가하는 것으로 끝내지 않는다.
-- [ ] \`src/services/policyGuard.ts\`의 \`lintOps\`와 CLI의 \`lintOperations\` 사이에 중복되거나 다른 판정이 있는지 비교하고, 공통 규칙 및 런타임별 어댑터의 책임을 정리한다.
+- [ ] `src/services/policyGuard.ts`의 `lintOps`와 CLI의 `lintOperations` 사이에 중복되거나 다른 판정이 있는지 비교하고, 공통 규칙 및 런타임별 어댑터의 책임을 정리한다.
 - [ ] 문서 종류, 신규·기존 문서, 사용자 제외 영역, 표 좌표, 중첩 표 제한 등 기존 규칙을 보존한다.
 - [ ] 정책 검사에 실패하면 문서 변경 엔진을 호출하지 않고, 어떤 정책이 거부했는지 구조화된 결과를 반환한다.
 - [ ] Hook 또는 Loop의 실행 구조는 이 단계의 호출 그래프와 회귀 결과를 비교한 후 선택한다. 모든 진입점에서 우회가 불가능하다는 테스트가 선택 기준이다.
@@ -162,17 +162,17 @@
 **우선순위:** P1
 
 **대상 파일**
-- \`src/store/useDocStore.ts\`
-- \`src/core/privacyMasker.ts\`
-- \`src-tauri/src/commands/claw_bridge.rs\`
-- \`src-tauri/src/commands/document.rs\`
-- \`resources/skills/hwp-document-editor/hwp-cli.mjs\`
-- \`resources/claw-hwp/scripts/hwpx-edit.js\`
+- `src/store/useDocStore.ts`
+- `src/core/privacyMasker.ts`
+- `src-tauri/src/commands/claw_bridge.rs`
+- `src-tauri/src/commands/document.rs`
+- `resources/skills/hwp-document-editor/hwp-cli.mjs`
+- `resources/claw-hwp/scripts/hwpx-edit.js`
 - 기존 참조자료 추출기 및 관련 테스트
 
 **작업 3-A · 외부 CLI의 문서·메모리 접근 통제**
 - [ ] 현재 자동 마스킹이 명령 문자열에 적용되는 범위와 staging 문서·작성 메모리 파일의 직접 접근 범위를 구분해 데이터 흐름도를 작성한다.
-- [ ] 외부 CLI가 \`HWP_STAGING_PATH\` 또는 \`HWP_WRITING_MEMORY_PATH\`를 통해 원본 데이터에 접근할 수 있다는 사실을 사용자에게 실행 전에 명확히 알린다.
+- [ ] 외부 CLI가 `HWP_STAGING_PATH` 또는 `HWP_WRITING_MEMORY_PATH`를 통해 원본 데이터에 접근할 수 있다는 사실을 사용자에게 실행 전에 명확히 알린다.
 - [ ] 원격 모델을 호출할 수 있는 CLI에 staging 파일 경로를 제공하기 전 사용자 동의를 요구한다. 사용자가 거부하면 해당 경로와 메모리 경로를 전달하지 않는다.
 - [ ] 개인정보 마스킹을 사용하는 경우 프롬프트 문자열뿐 아니라 외부 CLI가 읽는 데이터에도 적용할 수 있는 안전한 복사본 경로를 제공할지 검토하고, 원본 파일은 변경하지 않는다.
 - [ ] 마스킹을 적용할 수 없는 직접 파일 접근은 보호된 것으로 표시하지 않는다. 공급자별 전송·보관 정책은 앱이 보장한다고 주장하지 않는다.
@@ -184,7 +184,7 @@
 - [ ] 마스킹 기능이 꺼져 있거나 지원되지 않는 경우 UI가 그 사실을 정확히 알린다.
 
 **작업 3-B · Tauri 파일 경로 권한**
-- [ ] \`read_file_bytes\`와 \`write_file_bytes\`의 호출자를 조사하고, 파일 선택·열기·저장 흐름에서 허용된 경로만 전달되는지 확인한다.
+- [ ] `read_file_bytes`와 `write_file_bytes`의 호출자를 조사하고, 파일 선택·열기·저장 흐름에서 허용된 경로만 전달되는지 확인한다.
 - [ ] WebView에서 임의 경로 문자열을 직접 전달해 읽기·쓰기를 할 수 없도록 경로 권한 또는 선택된 파일 세션을 검증한다.
 - [ ] 기존 파일 열기·다른 이름으로 저장·원자적 교체 기능을 유지한다.
 - [ ] Windows 드라이브, UNC, 심볼릭 링크, 존재하지 않는 경로, 디렉터리 경로를 포함한 테스트를 추가한다.
@@ -209,19 +209,19 @@
 **우선순위:** P2
 
 **대상 파일**
-- \`.github/workflows/beta-validation.yml\`
+- `.github/workflows/beta-validation.yml`
 - 필요한 경우 별도 보안 워크플로 파일
 - GitHub 저장소 Rulesets 또는 브랜치 보호 설정
 
 **작업 4-A · 현재 CI 오류 수정**
-- [ ] 워크플로가 참조하는 \`src-tauri/src/commands/llm_proxy.rs\`가 현재 저장소에 존재하지 않는 것을 확인하고, Rust 포맷 검사와 staging 목록에서 잘못된 경로를 제거하거나 실제 파일 목록을 기준으로 동적으로 검사한다.
+- [ ] 워크플로가 참조하는 `src-tauri/src/commands/llm_proxy.rs`가 현재 저장소에 존재하지 않는 것을 확인하고, Rust 포맷 검사와 staging 목록에서 잘못된 경로를 제거하거나 실제 파일 목록을 기준으로 동적으로 검사한다.
 - [ ] Rust 포맷, Clippy, Rust 테스트가 앞 단계의 실패 때문에 건너뛰지 않고 실행되도록 job 의존성을 정리한다.
-- [ ] \`npm audit\`, Vitest, 프런트엔드 빌드, Rust 검증의 결과를 독립적인 검사 결과로 노출한다.
-- [ ] \`workflow_dispatch\`를 추가해 승인된 사람이 보안 검증을 수동 실행할 수 있게 한다.
+- [ ] `npm audit`, Vitest, 프런트엔드 빌드, Rust 검증의 결과를 독립적인 검사 결과로 노출한다.
+- [ ] `workflow_dispatch`를 추가해 승인된 사람이 보안 검증을 수동 실행할 수 있게 한다.
 
 **작업 4-B · 자동 보안 검사 추가**
-- [ ] npm 의존성 감사는 기존 \`npm audit --audit-level=high\`를 유지한다.
-- [ ] Rust 의존성 검사는 \`cargo audit\`를 추가하고 Cargo.lock 기준으로 실행한다.
+- [ ] npm 의존성 감사는 기존 `npm audit --audit-level=high`를 유지한다.
+- [ ] Rust 의존성 검사는 `cargo audit`를 추가하고 Cargo.lock 기준으로 실행한다.
 - [ ] 저장소 전체와 Git 이력의 비밀정보 검사는 Gitleaks로 수행한다. 최초 전체 이력 검사와 이후 변경분 검사를 구분한다.
 - [ ] 코드 정적 검사는 Semgrep 등 실제 실행 가능한 스캐너를 버전 고정해 추가한다. TypeScript/JavaScript와 Rust 규칙 범위를 각각 기록한다.
 - [ ] 개발 API 보안 테스트는 합성 fixture를 사용하는 격리된 로컬 테스트로 실행한다. 인터넷에 노출된 임시 서버나 운영 환경을 대상으로 하지 않는다.
@@ -255,13 +255,13 @@
 - [ ] P0/P1 미해결 항목이 있으면 배포 판단을 보류하고, 우회 통제와 후속 작업을 명시한다.
 
 **최종 검증 명령**
-- [ ] \`npm test\`
-- [ ] \`npm run lint\`
-- [ ] \`npm run build\`
-- [ ] \`npm audit --audit-level=high\`
-- [ ] \`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check\`
-- [ ] \`cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings\`
-- [ ] \`cargo test --locked --manifest-path src-tauri/Cargo.toml -- --test-threads=1\`
+- [ ] `npm test`
+- [ ] `npm run lint`
+- [ ] `npm run build`
+- [ ] `npm audit --audit-level=high`
+- [ ] `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`
+- [ ] `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings`
+- [ ] `cargo test --locked --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 - [ ] Gitleaks, 정적 분석, 로컬 개발 API 보안 테스트의 실제 실행 로그 확인
 
 **완료 기준:** 아래 정의에 따라 배포 가능 여부를 PASS / FAIL / NOT VERIFIED 중 하나로 판정한다.
@@ -322,13 +322,13 @@ T0 기준선·재현 테스트
 
 ## 9. 현재 확인된 기준과 미검증 범위
 
-- 기준 커밋의 \`vite.config.ts\`는 개발 서버 host를 \`0.0.0.0\`으로 설정하고 있다.
+- 기준 커밋의 `vite.config.ts`는 개발 서버 host를 `0.0.0.0`으로 설정하고 있다.
 - 개발 API에는 셸 실행 및 파일 접근 명령 경로가 존재한다.
-- \`/fonts/\` 및 \`/samples/\` 경로 처리에 허용 루트 내부인지 확인하는 검사가 필요하다.
-- \`AgentCliPanel.tsx\`는 파일 선택 경로를 \`ref-extract\` 명령 문자열에 결합한다.
-- UI의 \`policyGuard.ts\`와 CLI wrapper의 정책 검사는 존재하지만 모든 Tauri·엔진 직접 호출 경로에 동일하게 적용되는지는 추가 검증이 필요하다.
-- HWPX 파싱 경로에서 \`fflate.unzipSync()\`를 사용하는 부분이 확인되었다.
-- \`beta-validation.yml\`은 현재 존재하지 않는 \`src-tauri/src/commands/llm_proxy.rs\`를 Rust 포맷 검사 및 파일 목록에 참조한다.
+- `/fonts/` 및 `/samples/` 경로 처리에 허용 루트 내부인지 확인하는 검사가 필요하다.
+- `AgentCliPanel.tsx`는 파일 선택 경로를 `ref-extract` 명령 문자열에 결합한다.
+- UI의 `policyGuard.ts`와 CLI wrapper의 정책 검사는 존재하지만 모든 Tauri·엔진 직접 호출 경로에 동일하게 적용되는지는 추가 검증이 필요하다.
+- HWPX 파싱 경로에서 `fflate.unzipSync()`를 사용하는 부분이 확인되었다.
+- `beta-validation.yml`은 현재 존재하지 않는 `src-tauri/src/commands/llm_proxy.rs`를 Rust 포맷 검사 및 파일 목록에 참조한다.
 - 기준 시점에 main 브랜치 보호는 비활성화되어 있다.
 
 **중요한 미검증 항목:** 이전 검토에서는 로컬 보안 스캐너 실행 파일이 없어 외부 정적 분석기를 실행하지 못했다. 실제 DAST 재현, 전체 Git 이력 비밀정보 검사, 샘플 바이너리 내부 검사도 완료된 상태가 아니다. 이 항목들은 깨끗한 결과가 아니라 검증 공백으로 취급한다.
