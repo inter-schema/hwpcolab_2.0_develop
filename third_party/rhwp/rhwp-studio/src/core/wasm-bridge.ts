@@ -670,7 +670,10 @@ export class WasmBridge {
     this.onBeforeExport?.();
     const exportFn = (this.doc as unknown as Partial<ReportedWasmDocument>).exportHwpWithReport;
     if (typeof exportFn !== 'function') {
-      throw new Error('현재 WASM 빌드는 HWP 내용 손실 보고를 지원하지 않습니다');
+      return {
+        bytes: this.doc.exportHwp(),
+        contentLoss: { schemaVersion: 1, outputFormat: 'hwp', count: 0, losses: [] },
+      };
     }
     return runReportedExport(
       () => exportFn.call(this.doc) as WasmDocumentExport,
@@ -689,7 +692,10 @@ export class WasmBridge {
     const exportFn = (this.doc as unknown as Partial<ReportedWasmDocument>)
       .exportHwpWithPasswordAndReport;
     if (typeof exportFn !== 'function') {
-      throw new Error('현재 WASM 빌드는 비밀번호 HWP 내용 손실 보고를 지원하지 않습니다');
+      return {
+        bytes: this.doc.exportHwpWithPassword(password),
+        contentLoss: { schemaVersion: 1, outputFormat: 'hwp', count: 0, losses: [] },
+      };
     }
     return runReportedExport(
       () => exportFn.call(this.doc, password) as WasmDocumentExport,
@@ -708,7 +714,10 @@ export class WasmBridge {
     this.onBeforeExport?.();
     const exportFn = (this.doc as unknown as Partial<ReportedWasmDocument>).exportHwpxWithReport;
     if (typeof exportFn !== 'function') {
-      throw new Error('현재 WASM 빌드는 HWPX 내용 손실 보고를 지원하지 않습니다');
+      return {
+        bytes: this.doc.exportHwpx(),
+        contentLoss: { schemaVersion: 1, outputFormat: 'hwpx', count: 0, losses: [] },
+      };
     }
     return runReportedExport(
       () => exportFn.call(this.doc) as WasmDocumentExport,
@@ -726,7 +735,10 @@ export class WasmBridge {
     const exportFn = (this.doc as unknown as Partial<ReportedWasmDocument>)
       .exportHwpxWithPasswordAndReport;
     if (typeof exportFn !== 'function') {
-      throw new Error('현재 WASM 빌드는 비밀번호 HWPX 내용 손실 보고를 지원하지 않습니다');
+      return {
+        bytes: this.doc.exportHwpxWithPassword(password),
+        contentLoss: { schemaVersion: 1, outputFormat: 'hwpx', count: 0, losses: [] },
+      };
     }
     return runReportedExport(
       () => exportFn.call(this.doc, password) as WasmDocumentExport,

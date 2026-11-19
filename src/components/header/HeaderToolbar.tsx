@@ -5,32 +5,35 @@ import {
   FolderOpen,
   Save,
   Undo2,
-  Settings,
-  Sidebar,
-  ChevronLeft,
   Clock,
   MoreHorizontal,
   Scale,
-  ArrowLeftRight,
   FilePlus2,
   BookMarked,
+  Terminal,
+  PanelRight,
+  PanelBottom,
+  ShieldCheck,
 } from "lucide-react";
 
 export const HeaderToolbar: React.FC = () => {
   const {
     fileName,
+    isHwpx,
     isDirty,
     undoHistoryBytes,
-    sidebarOpen,
-    sidebarDock,
+    cliPanelOpen,
+    cliPanelDock,
+    autoMaskPii,
+    excludedRegions,
     openDocument,
     openDocumentBytes,
     createBlankDocument,
     saveToOriginalFile,
     undoLastChange,
-    toggleSidebar,
-    toggleSidebarDock,
-    setSettingsModalOpen,
+    toggleCliPanel,
+    toggleCliPanelDock,
+    setPiiModalOpen,
     setLicenseModalOpen,
     openMemoryModal,
     activeMemoryIds,
@@ -48,12 +51,13 @@ export const HeaderToolbar: React.FC = () => {
           await openDocument(selected);
         }
       } else {
-        // Browser fallback: trigger hidden file input
-        const fileInput = document.getElementById("header-hwp-file-input") as HTMLInputElement | null;
+        const fileInput = document.getElementById(
+          "header-hwp-file-input"
+        ) as HTMLInputElement | null;
         fileInput?.click();
       }
     } catch (e: any) {
-      alert(`파일 열기 오류: ${e?.message || e}`);
+      console.error("[HeaderToolbar] 파일 열기 오류:", e);
     }
   };
 
@@ -61,7 +65,7 @@ export const HeaderToolbar: React.FC = () => {
     try {
       await saveToOriginalFile();
     } catch (e: any) {
-      alert(`저장 실패: ${e?.message || e}`);
+      console.error("[HeaderToolbar] 저장 실패:", e);
     }
   };
 
@@ -85,26 +89,28 @@ export const HeaderToolbar: React.FC = () => {
             await openDocumentBytes(bytes, f.name);
           } catch (err: any) {
             console.error("[HeaderToolbar] 파일 열기 실패:", err);
-            alert(`파일 열기에 실패했습니다:\n${err?.message || err}`);
           } finally {
             input.value = "";
           }
         }}
       />
 
-      {/* Left: < HWP 편집 [문서명] ... 🕒 히스토리 + 파일 조작 */}
+      {/* Left: Brand + Document Title + Sample Switcher + File Ops */}
       <div className="flex items-center gap-2 min-w-0">
-        <button
-          onClick={toggleSidebar}
-          className="p-1 text-slate-600 hover:bg-slate-100 rounded transition-colors"
-          title="AI 협업 패널 열기/접기"
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </button>
-
-        <span className="font-extrabold text-slate-900 text-sm tracking-tight whitespace-nowrap">
-          HWP 편집
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="font-extrabold text-slate-900 text-sm tracking-tight whitespace-nowrap">
+            HOP-Claw Studio
+          </span>
+          <span
+            className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+              isHwpx
+                ? "bg-indigo-100 text-indigo-700 border border-indigo-200"
+                : "bg-slate-100 text-slate-700 border border-slate-200"
+            }`}
+          >
+            {isHwpx ? "HWPX" : "HWP"}
+          </span>
+        </div>
 
         <span
           id="header-doc-filename"
@@ -119,8 +125,9 @@ export const HeaderToolbar: React.FC = () => {
         <div className="relative">
           <button
             id="header-more-doc-btn"
+            data-testid="header-more-doc-btn"
             onClick={() => setSampleMenuOpen((v) => !v)}
-            className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded"
+            className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded cursor-pointer"
             title="샘플 문서 전환 및 새 문서 메뉴"
           >
             <MoreHorizontal className="w-4 h-4" />
@@ -129,18 +136,52 @@ export const HeaderToolbar: React.FC = () => {
           {sampleMenuOpen && (
             <div
               onMouseLeave={() => setSampleMenuOpen(false)}
-              className="absolute left-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl py-1.5 min-w-[240px] z-50 text-xs"
+              className="absolute left-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl py-1.5 min-w-[270px] z-50 text-xs"
             >
               <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase">
                 샘플 문서 불러오기
               </div>
               <button
+                id="load-sample-lesson-hwpx"
+                onClick={async () => {
+                  setSampleMenuOpen(false);
+                  await openDocument(
+                    "samples/(날짜)(교시)(과목명)교수.학습과정안(이름).hwpx"
+                  );
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-50 text-slate-700 flex items-center justify-between cursor-pointer"
+              >
+                <span>📄 교수·학습 과정안 양식 (.hwpx · 중첩 표 지원)</span>
+              </button>
+              <button
+                id="load-sample-ai-plan-hwpx"
+                onClick={async () => {
+                  setSampleMenuOpen(false);
+                  await openDocument("samples/2026_AI_행정업무_혁신계획(기획안).hwpx");
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-50 text-slate-700 flex items-center justify-between cursor-pointer"
+              >
+                <span>🏛️ 2026 AI 행정업무 혁신계획 기획안 (.hwpx)</span>
+              </button>
+              <button
+                id="load-sample-official-hwpx"
+                onClick={async () => {
+                  setSampleMenuOpen(false);
+                  await openDocument("samples/demo_official_report.hwpx");
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-50 text-slate-700 flex items-center justify-between cursor-pointer"
+              >
+                <span>🏛️ 행정기관 공문서 샘플 (.hwpx)</span>
+              </button>
+              <button
                 id="load-sample-lesson-hwp"
                 onClick={async () => {
                   setSampleMenuOpen(false);
-                  await openDocument("samples/(날짜)(교시)(과목명)교수.학습과정안(이름).hwp");
+                  await openDocument(
+                    "samples/(날짜)(교시)(과목명)교수.학습과정안(이름).hwp"
+                  );
                 }}
-                className="w-full px-3 py-1.5 text-left hover:bg-slate-50 text-slate-700 flex items-center justify-between"
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-50 text-slate-700 flex items-center justify-between cursor-pointer"
               >
                 <span>📄 교수·학습 과정안 양식 (.hwp)</span>
               </button>
@@ -150,42 +191,32 @@ export const HeaderToolbar: React.FC = () => {
                   setSampleMenuOpen(false);
                   await openDocument("samples/demo_official_report.hwp");
                 }}
-                className="w-full px-3 py-1.5 text-left hover:bg-slate-50 text-slate-700 flex items-center justify-between"
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-50 text-slate-700 flex items-center justify-between cursor-pointer"
               >
                 <span>🏛️ 행정기관 공문서 샘플 (.hwp)</span>
               </button>
-              <button
-                id="load-sample-official-hwpx"
-                onClick={async () => {
-                  setSampleMenuOpen(false);
-                  await openDocument("samples/demo_official_report.hwpx");
-                }}
-                className="w-full px-3 py-1.5 text-left hover:bg-slate-50 text-slate-700 flex items-center justify-between"
-              >
-                <span>🏛️ 행정기관 공문서 샘플 (.hwpx)</span>
-              </button>
               <div className="my-1 border-t border-slate-100" />
-              <button
-                id="header-new-hwp-btn"
-                onClick={async () => {
-                  setSampleMenuOpen(false);
-                  await createBlankDocument(false);
-                }}
-                className="w-full px-3 py-1.5 text-left hover:bg-slate-50 text-slate-700 flex items-center gap-1.5"
-              >
-                <FilePlus2 className="w-3.5 h-3.5 text-indigo-600" />
-                <span>새 빈 문서 (.hwp)</span>
-              </button>
               <button
                 id="header-new-hwpx-btn"
                 onClick={async () => {
                   setSampleMenuOpen(false);
                   await createBlankDocument(true);
                 }}
-                className="w-full px-3 py-1.5 text-left hover:bg-slate-50 text-slate-700 flex items-center gap-1.5"
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-50 text-slate-700 flex items-center gap-1.5 cursor-pointer"
               >
-                <FilePlus2 className="w-3.5 h-3.5 text-teal-600" />
-                <span>새 빈 문서 (.hwpx)</span>
+                <FilePlus2 className="w-3.5 h-3.5 text-indigo-600" />
+                <span>새 빈 문서 (.hwpx · 표준 권장)</span>
+              </button>
+              <button
+                id="header-new-hwp-btn"
+                onClick={async () => {
+                  setSampleMenuOpen(false);
+                  await createBlankDocument(false);
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-50 text-slate-700 flex items-center gap-1.5 cursor-pointer"
+              >
+                <FilePlus2 className="w-3.5 h-3.5 text-slate-500" />
+                <span>새 빈 문서 (.hwp)</span>
               </button>
             </div>
           )}
@@ -202,7 +233,7 @@ export const HeaderToolbar: React.FC = () => {
         <button
           id="header-open-btn"
           onClick={handleOpen}
-          className="flex items-center gap-1 text-xs px-2 py-1 rounded text-slate-700 hover:bg-slate-100 font-medium"
+          className="flex items-center gap-1 text-xs px-2 py-1 rounded text-slate-700 hover:bg-slate-100 font-medium cursor-pointer"
           title="로컬 HWP/HWPX 열기 (Ctrl+O)"
         >
           <FolderOpen className="w-3.5 h-3.5 text-slate-600" />
@@ -212,7 +243,7 @@ export const HeaderToolbar: React.FC = () => {
         <button
           id="header-save-btn"
           onClick={handleSave}
-          className={`flex items-center gap-1 text-xs px-2 py-1 rounded font-medium transition-colors ${
+          className={`flex items-center gap-1 text-xs px-2 py-1 rounded font-medium transition-colors cursor-pointer ${
             isDirty
               ? "bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-100"
               : "text-slate-500 hover:bg-slate-100"
@@ -229,45 +260,23 @@ export const HeaderToolbar: React.FC = () => {
           disabled={undoHistoryBytes.length === 0}
           className={`p-1 rounded transition-colors ${
             undoHistoryBytes.length > 0
-              ? "text-slate-700 hover:bg-slate-100"
+              ? "text-slate-700 hover:bg-slate-100 cursor-pointer"
               : "text-slate-300 cursor-not-allowed"
           }`}
-          title="AI/패치 변경 되돌리기 (Ctrl+Z)"
+          title="패치/스테이징 변경 되돌리기 (Ctrl+Z)"
         >
           <Undo2 className="w-3.5 h-3.5" />
         </button>
       </div>
 
-      {/* Right: Dock Switch + Icons + Profile */}
+      {/* Right: Writing Memory + PII Protection + Agent CLI Terminal Controls + GPL v3.0 */}
       <div className="flex items-center gap-2">
-
-        <button
-          id="header-dock-toggle-btn"
-          onClick={toggleSidebarDock}
-          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50"
-          title="AI 채팅 패널 위치 전환 (좌측 / 우측)"
-        >
-          <ArrowLeftRight className="w-3 h-3" />
-          <span>AI 패널: {sidebarDock === "left" ? "좌측" : "우측"}</span>
-        </button>
-
-        <button
-          id="header-sidebar-toggle-btn"
-          onClick={toggleSidebar}
-          className={`p-1.5 rounded transition-colors ${
-            sidebarOpen ? "bg-teal-50 text-teal-800" : "text-slate-500 hover:bg-slate-100"
-          }`}
-          title="AI 사이드바 표시/숨기기 (Ctrl+B)"
-        >
-          <Sidebar className="w-4 h-4" />
-        </button>
-
         <button
           id="header-writing-memory-btn"
           data-testid="header-writing-memory-btn"
           onClick={() => openMemoryModal("list")}
-          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
-          title="작성 선호사항 메모리 관리 및 다중 문서 학습"
+          className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+          title="작성 선호사항 메모리 관리 ($HWP_WRITING_MEMORY_PATH)"
         >
           <BookMarked className="w-3.5 h-3.5 text-teal-600" />
           <span>작성 선호사항</span>
@@ -279,19 +288,60 @@ export const HeaderToolbar: React.FC = () => {
         </button>
 
         <button
-          id="header-ai-settings-btn"
-          onClick={() => setSettingsModalOpen(true)}
-          className="p-1.5 text-slate-500 hover:bg-slate-100 rounded"
-          title="AI 프로바이더(BAZE / Claude / OpenAI / Gemini / Ollama / 사용자 지정) 및 프라이버시 설정"
+          id="header-pii-privacy-btn"
+          data-testid="header-pii-privacy-btn"
+          onClick={() => setPiiModalOpen(true)}
+          className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded border transition-colors cursor-pointer ${
+            autoMaskPii || excludedRegions.length > 0
+              ? "bg-emerald-50 border-emerald-300 text-emerald-800 font-semibold"
+              : "border-slate-200 text-slate-600 hover:bg-slate-50"
+          }`}
+          title="개인정보(PII) 자동 마스킹 및 제외 영역 관리"
         >
-          <Settings className="w-4 h-4" />
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+          <span>PII 보호</span>
+          {(autoMaskPii || excludedRegions.length > 0) && (
+            <span className="text-[10px] font-bold px-1 rounded bg-emerald-200/80 text-emerald-900">
+              {autoMaskPii ? "ON" : `제외${excludedRegions.length}`}
+            </span>
+          )}
+        </button>
+
+        <button
+          id="header-dock-toggle-btn"
+          data-testid="header-dock-toggle-btn"
+          onClick={toggleCliPanelDock}
+          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer"
+          title="에이전트 CLI 터미널 도킹 위치 전환 (우측 / 하단)"
+        >
+          {cliPanelDock === "right" ? (
+            <PanelRight className="w-3.5 h-3.5 text-indigo-600" />
+          ) : (
+            <PanelBottom className="w-3.5 h-3.5 text-indigo-600" />
+          )}
+          <span>CLI 도킹: {cliPanelDock === "right" ? "우측" : "하단"}</span>
+        </button>
+
+        <button
+          id="header-cli-toggle-btn"
+          data-testid="header-cli-toggle-btn"
+          onClick={toggleCliPanel}
+          className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded font-semibold transition-colors cursor-pointer ${
+            cliPanelOpen
+              ? "bg-indigo-600 text-white shadow-xs"
+              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+          }`}
+          title="에이전트 CLI 터미널 패널 열기/닫기 (Ctrl+B)"
+        >
+          <Terminal className="w-3.5 h-3.5" />
+          <span>Agent CLI</span>
         </button>
 
         <button
           id="header-license-btn"
           data-testid="header-license-btn"
           onClick={() => setLicenseModalOpen(true)}
-          className="flex items-center gap-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded transition-colors"
+          className="flex items-center gap-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded transition-colors cursor-pointer"
           title="GNU General Public License v3.0 라이선스 정보"
         >
           <Scale className="w-3.5 h-3.5 text-slate-500" />

@@ -1,5 +1,4 @@
 import { diff_match_patch } from "diff-match-patch";
-import { createProviderAdapter } from "../services/agent/adapters/index.ts";
 import {
   normalizeMemoryBody,
   parseMemorySections,
@@ -71,6 +70,38 @@ export function computeSectionDiffs(
       tokens,
     };
   });
+}
+
+function buildDeterministicRefinedBody(
+  currentBody: string,
+  instruction: string,
+  extraDocs: Array<{ name: string; text: string }>
+): string {
+  const sections = parseMemorySections(currentBody);
+  const instr = instruction.trim();
+
+  if (instr) {
+    if (/어투|문체|존댓말|격식|개조식|종결/.test(instr)) {
+      sections["어투·문체"] = `${sections["어투·문체"].trim()}\n- [다듬기 반영] ${instr}`;
+    } else if (/표|서식|셀|정렬|줄\s*간격/.test(instr)) {
+      sections["서식·표 규칙"] = `${sections["서식·표 규칙"].trim()}\n- [다듬기 반영] ${instr}`;
+    } else if (/용어|표기|날짜|숫자|단위/.test(instr)) {
+      sections["용어·표기"] = `${sections["용어·표기"].trim()}\n- [다듬기 반영] ${instr}`;
+    } else if (/금지|지양|피해/.test(instr)) {
+      sections["금지·지양"] = `${sections["금지·지양"].trim()}\n- [다듬기 반영] ${instr}`;
+    } else if (/구조|제목|번호|목차/.test(instr)) {
+      sections["구조(제목 체계)"] = `${sections["구조(제목 체계)"].trim()}\n- [다듬기 반영] ${instr}`;
+    } else {
+      sections["문서 유형·양식"] = `${sections["문서 유형·양식"].trim()}\n- [다듬기 반영] ${instr}`;
+    }
+  }
+
+  if (extraDocs.length > 0) {
+    const docNames = extraDocs.map((d) => d.name).join(", ");
+    sections["문서 유형·양식"] = `${sections["문서 유형·양식"].trim()}\n- 추가 참고 문서 반영: ${docNames}`;
+  }
+
+  return serializeMemorySections(sections);
 }
 
 export async function proposeRefinement(
@@ -153,43 +184,53 @@ export async function proposeRefinement(
     );
   }
 
-  const promptParts: string[] = [
-    `### [현재 작성 선호사항 가이드]\n${args.doc.body}`,
-  ];
-
-  if (sanitizedInstruction) {
-    promptParts.push(`### [사용자 다듬기 지시사항]\n${sanitizedInstruction}`);
+  let rawRefinedContent = "";
+  if (args.provider && args.provider.apiKey && args.provider.apiKey.trim().length > 0) {
+    try {
+      const { createProviderAdapter } = await import("../services/agent/adapters/index.ts");
+      const promptParts: string[] = [
+        `### [현재 작성 선호사항 가이드]\n${args.doc.body}`,
+      ];
+      if (sanitizedInstruction) {
+        promptParts.push(`### [사용자 다듬기 지시사항]\n${sanitizedInstruction}`);
+      }
+      if (processedDocs.length > 0) {
+        const extraDocsText = processedDocs
+          .map((d, i) => `#### [추가 문서 ${i + 1}: ${d.name}]\n${d.text}`)
+          .join("\n\n");
+        promptParts.push(`### [추가 학습 예시 문서]\n${extraDocsText}`);
+      }
+      promptParts.push(
+        "위 내용을 종합하여 현재 가이드의 7개 섹션을 개선한 완성본 마크다운을 작성해 주십시오."
+      );
+      const userPrompt = promptParts.join("\n\n");
+      const adapter = createProviderAdapter(args.provider);
+      const resp = await adapter.turn({
+        systemPrompt: REFINE_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: userPrompt }],
+        tools: [],
+        toolChoice: "none",
+        reasoningEffort: "medium",
+        timeoutMs: 180_000,
+        signal: args.signal,
+      });
+      rawRefinedContent = resp.content || "";
+    } catch {
+      rawRefinedContent = buildDeterministicRefinedBody(
+        args.doc.body,
+        sanitizedInstruction,
+        processedDocs
+      );
+    }
+  } else {
+    rawRefinedContent = buildDeterministicRefinedBody(
+      args.doc.body,
+      sanitizedInstruction,
+      processedDocs
+    );
   }
 
-  if (processedDocs.length > 0) {
-    const extraDocsText = processedDocs
-      .map((d, i) => `#### [추가 문서 ${i + 1}: ${d.name}]\n${d.text}`)
-      .join("\n\n");
-    promptParts.push(`### [추가 학습 예시 문서]\n${extraDocsText}`);
-  }
-
-  promptParts.push(
-    "위 내용을 종합하여 현재 가이드의 7개 섹션을 개선한 완성본 마크다운을 작성해 주십시오."
-  );
-
-  const userPrompt = promptParts.join("\n\n");
-
-  const adapter = createProviderAdapter(args.provider);
-  const resp = await adapter.turn({
-    systemPrompt: REFINE_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: userPrompt }],
-    tools: [],
-    toolChoice: "none",
-    reasoningEffort: "medium",
-    timeoutMs: 180_000,
-    signal: args.signal,
-  });
-
-  if (!resp.content || resp.content.trim().length === 0) {
-    throw new Error("AI 모델로부터 다듬기 제안 응답을 받지 못했습니다.");
-  }
-
-  const normalized = normalizeMemoryBody(resp.content);
+  const normalized = normalizeMemoryBody(rawRefinedContent);
   const outputScan = scanAndRedactPii(normalized);
   if (outputScan.totalCount > 0) {
     warnings.push(
@@ -232,7 +273,6 @@ export function applySectionDecisions(
 
   const mergedBody = scanAndRedactPii(serializeMemorySections(selectedMap)).text;
 
-  // Source docs merge & deduplicate by name + sha256_8
   const sourceDocMap = new Map<string, SourceDocRef>();
   for (const d of doc.meta.sourceDocs || []) {
     sourceDocMap.set(`${d.name}::${d.sha256_8}`, d);

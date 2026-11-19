@@ -7,7 +7,6 @@ use commands::attachment::*;
 use commands::claw_bridge::*;
 use commands::document::*;
 use commands::fonts::*;
-use commands::llm_proxy::*;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -25,8 +24,9 @@ pub fn run() {
             inspect_document,
             extract_markdown,
             execute_claw_ops,
-            call_llm_http,
-            cancel_llm_request,
+            check_staging_status,
+            sync_writing_memory_file,
+            execute_agent_cli_command,
             read_attachment_bytes,
         ])
         .run(tauri::generate_context!())

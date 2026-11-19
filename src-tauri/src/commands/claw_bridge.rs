@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::{Instant, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tauri::{AppHandle, Manager};
@@ -13,6 +14,29 @@ pub struct ClawExecResult {
     pub ok: bool,
     pub stdout_json: serde_json::Value,
     pub stderr: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct StagingStatusResult {
+    pub exists: bool,
+    #[serde(rename = "mtimeMs")]
+    pub mtime_ms: u64,
+    pub size: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct AgentCliExecResult {
+    pub ok: bool,
+    #[serde(rename = "exitCode")]
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    #[serde(rename = "durationMs")]
+    pub duration_ms: u64,
+    #[serde(rename = "stagingModified")]
+    pub staging_modified: bool,
+    #[serde(rename = "stagingMtimeMs")]
+    pub staging_mtime_ms: u64,
 }
 
 fn resolve_node_binary() -> PathBuf {
@@ -81,10 +105,6 @@ fn resolve_node_binary() -> PathBuf {
     PathBuf::from("node")
 }
 
-// `mut` below is only needed on Windows (creation_flags); on Linux
-// clippy -D warnings would fail without this, while the Windows build
-// still needs the mutable binding. Same Linux-only issue as the
-// 2026-11-04 QA branch fix, which Main never picked up.
 #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
 fn new_node_command() -> Command {
     let node_bin = resolve_node_binary();
@@ -109,7 +129,6 @@ fn strip_unc_prefix(path: PathBuf) -> PathBuf {
 
 fn resolve_script_path_inner(app: &AppHandle, script_name: &str) -> Result<PathBuf, String> {
     if let Ok(resource_dir) = app.path().resource_dir() {
-        // Tauri v2 maps "../resources/..." to "_up_/resources/..." in resource_dir
         let up_candidate = resource_dir
             .join("_up_")
             .join("resources")
@@ -129,7 +148,6 @@ fn resolve_script_path_inner(app: &AppHandle, script_name: &str) -> Result<PathB
             return Ok(candidate);
         }
     }
-    // Exe 옆에 resources 폴더가 있는 포터블 실행 환경 지원
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             let portable_candidate = exe_dir
@@ -151,7 +169,6 @@ fn resolve_script_path_inner(app: &AppHandle, script_name: &str) -> Result<PathB
             }
         }
     }
-    // 개발 모드 폴백 경로
     let current = std::env::current_dir().map_err(|e| e.to_string())?;
     let root = if current.ends_with("src-tauri") {
         current.parent().unwrap_or(&current).to_path_buf()
@@ -172,6 +189,107 @@ fn resolve_script_path_inner(app: &AppHandle, script_name: &str) -> Result<PathB
 fn resolve_script_path(app: &AppHandle, script_name: &str) -> Result<PathBuf, String> {
     let p = resolve_script_path_inner(app, script_name)?;
     Ok(strip_unc_prefix(p))
+}
+
+fn file_mtime_ms(path: &PathBuf) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[tauri::command]
+pub async fn check_staging_status(file_path: String) -> Result<StagingStatusResult, String> {
+    let p = strip_unc_prefix(PathBuf::from(file_path));
+    if !p.exists() {
+        return Ok(StagingStatusResult {
+            exists: false,
+            mtime_ms: 0,
+            size: 0,
+        });
+    }
+    let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
+    let mtime_ms = file_mtime_ms(&p);
+    Ok(StagingStatusResult {
+        exists: true,
+        mtime_ms,
+        size: meta.len(),
+    })
+}
+
+#[tauri::command]
+pub async fn sync_writing_memory_file(content: String) -> Result<String, String> {
+    let dir = std::env::temp_dir().join("hop-claw-staging");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let file_path = dir.join("active_writing_memory.md");
+    std::fs::write(&file_path, content.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn execute_agent_cli_command(
+    command: String,
+    staging_path: Option<String>,
+    writing_memory_path: Option<String>,
+    selection_json: Option<String>,
+) -> Result<AgentCliExecResult, String> {
+    let start = Instant::now();
+    let staging_str = staging_path.unwrap_or_default();
+    let staging_buf = PathBuf::from(&staging_str);
+    let before_mtime = if !staging_str.is_empty() && staging_buf.exists() {
+        file_mtime_ms(&staging_buf)
+    } else {
+        0
+    };
+
+    let current = std::env::current_dir().map_err(|e| e.to_string())?;
+    let root = if current.ends_with("src-tauri") {
+        current.parent().unwrap_or(&current).to_path_buf()
+    } else {
+        current
+    };
+    let skills_bin = root.join("resources").join("skills").join("bin");
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+    let new_path = format!("{}{}{}", skills_bin.to_string_lossy(), sep, old_path);
+
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg(&command);
+        c
+    } else {
+        let mut c = Command::new("bash");
+        c.arg("-c").arg(&command);
+        c
+    };
+
+    cmd.current_dir(&root)
+        .env("PATH", new_path)
+        .env("HWP_STAGING_PATH", &staging_str)
+        .env("HWP_WRITING_MEMORY_PATH", writing_memory_path.unwrap_or_default())
+        .env("HWP_SELECTION_JSON", selection_json.unwrap_or_default())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = cmd.output().await.map_err(|e| e.to_string())?;
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let after_mtime = if !staging_str.is_empty() && staging_buf.exists() {
+        file_mtime_ms(&staging_buf)
+    } else {
+        0
+    };
+
+    Ok(AgentCliExecResult {
+        ok: output.status.success(),
+        exit_code: output.status.code().unwrap_or(1),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        duration_ms,
+        staging_modified: before_mtime > 0 && after_mtime > before_mtime,
+        staging_mtime_ms: after_mtime,
+    })
 }
 
 /// 1) 문서 구조 및 셀 텍스트 전수 검사 (extract_text.js --inspect --with-cell-text)

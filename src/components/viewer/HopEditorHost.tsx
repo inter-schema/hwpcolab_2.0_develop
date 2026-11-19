@@ -1,10 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import { bootHopStudio } from "../../hop-host/main";
 import { hopBridge } from "../../core/hopBridge";
 import { useDocStore } from "../../store/useDocStore";
-import { SmartDiffOverlay } from "./SmartDiffOverlay";
-import { InlineQuickToolbar } from "../floating/InlineQuickToolbar";
-import { Sparkles, CheckCircle2, Eye, Loader2 } from "lucide-react";
+import { RhwpDiffReviewOverlay } from "./RhwpDiffReviewOverlay";
 
 const STUDIO_HTML = `
     <!-- 메뉴바 -->
@@ -219,7 +217,7 @@ const STUDIO_HTML = `
       </div>
       <span class="tb-sep"></span>
       <div class="tb-group">
-        <button class="tb-btn" data-cmd="table:create" title="표"><span class="tb-sprite icon-table"></span><span class="tb-label">표 ▾</span></button>
+        <button class="tb-btn" data-cmd="table:create" title="표 만들기 (표 셀 내부에서는 중첩 표 삽입)"><span class="tb-sprite icon-table"></span><span class="tb-label">표 ▾</span></button>
         <button class="tb-btn" id="tb-shape" data-cmd="insert:shape" title="도형"><span class="tb-sprite icon-shape"></span><span class="tb-label">도형 ▾</span></button>
         <button class="tb-btn" data-cmd="insert:image" title="그림"><span class="tb-sprite icon-image"></span><span class="tb-label">그림</span></button>
       </div>
@@ -465,37 +463,7 @@ const StaticHopDom = React.memo(
 
 export const HopEditorHost: React.FC = () => {
   const studioRootRef = useRef<HTMLDivElement | null>(null);
-  const overlayHostRef = useRef<HTMLDivElement | null>(null);
-  const [toolbarPos, setToolbarPos] = useState<{ x: number; y: number } | null>(null);
-  const [showQuickTrigger, setShowQuickTrigger] = useState<{ x: number; y: number } | null>(null);
-  const [isApplyingDiffs, setIsApplyingDiffs] = useState(false);
-
-  const selection = useDocStore((s) => s.selection);
   const setSelection = useDocStore((s) => s.setSelection);
-  const pendingDiffs = useDocStore((s) => s.pendingDiffs);
-  const acceptAllDiffs = useDocStore((s) => s.acceptAllDiffs);
-  const rejectAllDiffs = useDocStore((s) => s.rejectAllDiffs);
-
-  const handleAcceptAll = async () => {
-    if (isApplyingDiffs) return;
-    setIsApplyingDiffs(true);
-    try {
-      await acceptAllDiffs();
-    } catch (err: any) {
-      console.error("[HopEditorHost] 변경사항 모두 적용 실패:", err);
-      alert(`변경사항 적용 중 오류가 발생했습니다:\n${err?.message || err}`);
-    } finally {
-      setIsApplyingDiffs(false);
-    }
-  };
-
-  const pendingDiffCount = pendingDiffs.filter((d) => d.status === "pending").length;
-  const selectionPreviewText =
-    selection?.kind === "table_cells"
-      ? `표#${selection.tableIndex}(${selection.startRow},${selection.startCol})`
-      : selection?.kind === "body_range"
-      ? selection.selectedText
-      : "";
 
   useEffect(() => {
     let disposed = false;
@@ -514,24 +482,30 @@ export const HopEditorHost: React.FC = () => {
     });
 
     bootHopStudio().catch((err) => {
-      console.error("[HopEditorHost] Failed to boot HOP studio:", err);
+      console.error("[HopEditorHost] Failed to boot rhwp-studio:", err);
     });
 
-    const handlePointerOrKey = (e: Event) => {
+    // Keep [표 ▾] (table:create) button enabled even when cursor is inside a table cell
+    const ensureTableCreateEnabled = () => {
+      const rootEl = studioRootRef.current;
+      if (!rootEl) return;
+      const btns = rootEl.querySelectorAll<HTMLElement>('[data-cmd="table:create"]');
+      btns.forEach((btn) => {
+        btn.classList.remove("disabled");
+        if (btn instanceof HTMLButtonElement) {
+          btn.disabled = false;
+        }
+      });
+    };
+
+    const handlePointerOrKey = () => {
       setTimeout(() => {
         if (disposed) return;
+        ensureTableCreateEnabled();
         const state = useDocStore.getState();
         const readRes = hopBridge.readCurrentSelection(state.tablesMeta);
         if (readRes.selection) {
           setSelection(readRes.selection);
-          if (readRes.toolbarPos) {
-            setShowQuickTrigger(readRes.toolbarPos);
-          } else if (e instanceof MouseEvent && overlayHostRef.current) {
-            const rect = overlayHostRef.current.getBoundingClientRect();
-            const relX = Math.max(16, Math.min(rect.width - 360, e.clientX - rect.left - 80));
-            const relY = Math.max(88, Math.min(rect.height - 200, e.clientY - rect.top - 52));
-            setShowQuickTrigger({ x: relX, y: relY });
-          }
         }
       }, 40);
     };
@@ -553,160 +527,14 @@ export const HopEditorHost: React.FC = () => {
     };
   }, [setSelection]);
 
-  const handleOpenInlineToolbar = () => {
-    const state = useDocStore.getState();
-    const readRes = hopBridge.readCurrentSelection(state.tablesMeta);
-    let sel = readRes.selection || state.selection;
-    if (!sel) {
-      // Fallback: pick first table cell or first body paragraph so user can always invoke Inline Quick Toolbar
-      if (state.tablesMeta.length > 0 && state.tablesMeta[0].cells.length > 0) {
-        const c = state.tablesMeta[0].cells[0];
-        const bbox = c.bbox || {
-          cellIdx: c.idx,
-          row: c.row,
-          col: c.col,
-          rowSpan: c.rowSpan,
-          colSpan: c.colSpan,
-          pageIndex: 0,
-          x: 180,
-          y: 180,
-          w: 120,
-          h: 32,
-        };
-        sel = {
-          kind: "table_cells",
-          tableIndex: 0,
-          sec: state.tablesMeta[0].sec,
-          para: state.tablesMeta[0].para,
-          ctrl: state.tablesMeta[0].ctrl,
-          startRow: c.row,
-          startCol: c.col,
-          endRow: c.row,
-          endCol: c.col,
-          selectedCells: [
-            {
-              cellIdx: c.idx,
-              row: c.row,
-              col: c.col,
-              text: c.text || "",
-              bbox,
-            },
-          ],
-          unionRect: { pageIndex: bbox.pageIndex, x: bbox.x, y: bbox.y, width: bbox.w, height: bbox.h },
-        };
-      } else {
-        const firstLine = (state.docMarkdown || "문서 본문").split("\n").find((l) => l.trim().length > 0) || "문서 본문";
-        sel = {
-          kind: "body_range",
-          sec: 0,
-          startPara: 0,
-          startOffset: 0,
-          endPara: 0,
-          endOffset: firstLine.length,
-          selectedText: firstLine,
-          rects: [{ pageIndex: 0, x: 180, y: 140, width: 240, height: 28 }],
-        };
-      }
-      setSelection(sel);
-    }
-    if (showQuickTrigger) {
-      setToolbarPos(showQuickTrigger);
-      setShowQuickTrigger(null);
-    } else if (readRes.toolbarPos) {
-      setToolbarPos(readRes.toolbarPos);
-    } else {
-      setToolbarPos({ x: 160, y: 140 });
-    }
-  };
-
   return (
-    <div id="hop-editor-host" ref={overlayHostRef} className="relative flex-1 h-full overflow-hidden bg-[#e5e7eb]">
-      {/* Genuine golbin/hop Studio Root */}
-      <StaticHopDom hostRef={studioRootRef} />
+    <div id="hop-editor-host" className="relative flex-1 h-full flex flex-col overflow-hidden bg-[#e5e7eb]">
+      {/* rhwp-studio Visual Diff Review Bar & Drawer when Agent CLI modifies staging document */}
+      <RhwpDiffReviewOverlay />
 
-      {/* Floating AI Inline Action Button (and selection trigger) */}
-      <div className="pointer-events-none absolute inset-0 z-30">
-        {/* Top-right floating AI quick action & Smart Diff summary bar inside editor canvas area */}
-        <div className="pointer-events-auto absolute right-5 top-[118px] flex items-center gap-2">
-          {pendingDiffCount > 0 && (
-            <div
-              data-testid="smart-diff-banner"
-              className="flex items-center gap-2 rounded-lg border border-emerald-300 bg-white/95 px-3 py-1.5 text-xs shadow-md backdrop-blur"
-            >
-              <Eye className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="font-semibold text-slate-800">
-                Smart Diff 대기 <span className="text-emerald-600">{pendingDiffCount}건</span>
-              </span>
-              <button
-                id="header-accept-all-diffs-btn"
-                data-testid="smart-diff-accept-all-btn"
-                onClick={handleAcceptAll}
-                disabled={isApplyingDiffs}
-                className={`flex items-center gap-1 rounded bg-emerald-600 px-2 py-0.5 font-medium text-white transition-colors ${
-                  isApplyingDiffs ? "opacity-60 cursor-not-allowed" : "hover:bg-emerald-700"
-                }`}
-                title="대기 중인 모든 변경사항 일괄 수락 (Ctrl+Enter)"
-              >
-                {isApplyingDiffs ? (
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                ) : (
-                  <CheckCircle2 className="w-3 h-3" />
-                )}
-                <span>{isApplyingDiffs ? "적용 중..." : `모두 적용 (${pendingDiffCount})`}</span>
-              </button>
-              <button
-                onClick={() => rejectAllDiffs()}
-                disabled={isApplyingDiffs}
-                className="rounded border border-slate-200 px-2 py-0.5 text-slate-600 hover:bg-slate-100 disabled:opacity-50"
-              >
-                전체 취소
-              </button>
-            </div>
-          )}
-
-          <button
-            data-testid="open-inline-ai-toolbar-btn"
-            onClick={handleOpenInlineToolbar}
-            className="flex items-center gap-1.5 rounded-lg border border-teal-700/20 bg-[#134e4a] px-3 py-1.5 text-xs font-medium text-white shadow-md hover:bg-[#0f3f3c] transition-colors"
-            title="선택한 문단/셀에 인라인 AI 편집 도구 열기"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-            <span>인라인 AI 도구</span>
-            {selectionPreviewText && (
-              <span className="ml-1 max-w-[110px] truncate rounded bg-white/15 px-1.5 py-0.2 text-[10px] text-teal-100">
-                {selectionPreviewText}
-              </span>
-            )}
-          </button>
-        </div>
-
-        {/* Contextual Floating Trigger near mouse selection */}
-        {showQuickTrigger && !toolbarPos && selectionPreviewText && (
-          <button
-            data-testid="selection-ai-trigger"
-            style={{ left: showQuickTrigger.x, top: showQuickTrigger.y }}
-            onClick={() => {
-              setToolbarPos(showQuickTrigger);
-              setShowQuickTrigger(null);
-            }}
-            className="pointer-events-auto absolute flex items-center gap-1.5 rounded-full border border-teal-500/40 bg-[#134e4a] px-3 py-1 text-xs font-medium text-white shadow-lg hover:scale-105 transition-transform"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-            <span>AI 빠른 편집</span>
-          </button>
-        )}
-
-        {/* Smart Diff Canvas Overlay */}
-        <SmartDiffOverlay />
-
-        {/* Inline Quick Toolbar */}
-        <InlineQuickToolbar
-          position={toolbarPos}
-          onClose={() => {
-            setToolbarPos(null);
-            setShowQuickTrigger(null);
-          }}
-        />
+      {/* Genuine rhwp-studio Editor Root */}
+      <div className="relative flex-1 min-h-0 overflow-hidden">
+        <StaticHopDom hostRef={studioRootRef} />
       </div>
     </div>
   );

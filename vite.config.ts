@@ -1,337 +1,422 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
-import { spawn, execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import * as crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import { createHopOverrides } from "./hop-overrides";
-import { isValidHwpxPackage } from "./src/hop-host/core/hwpx-package";
-import { copyFileAtomically } from "./src/hop-host/core/atomic-file";
 import { handleFontAssetRequest } from "./src/hop-host/core/font-asset-middleware";
-import { ActiveHttpRequests } from "./src/hop-host/core/active-http-requests";
-import {
-  normalizeLlmTimeoutMs,
-  readBoundedResponseText,
-  serializeBoundedRequestBody,
-  validateLlmEndpoint,
-} from "./src/hop-host/core/llm-http-bridge";
 
-const rootDir = __dirname;
-const hopSrc = resolve(rootDir, "src/hop-host");
-const upstreamSrc = resolve(rootDir, "third_party/rhwp/rhwp-studio/src");
-const wasmDir = resolve(rootDir, "vendor/rhwp-core");
-const fontsDir = resolve(rootDir, "assets/fonts");
-const stagingDir = resolve(rootDir, ".hop-staging");
-const clawScriptsDir = resolve(rootDir, "resources/claw-hwp/scripts");
+const WORKSPACE_ROOT = path.resolve(__dirname);
+const HOP_HOST_SRC = path.resolve(WORKSPACE_ROOT, "src/hop-host");
+const RHWP_STUDIO_SRC = path.resolve(WORKSPACE_ROOT, "third_party/rhwp/rhwp-studio/src");
+const FONTS_DIR = path.resolve(WORKSPACE_ROOT, "assets/fonts");
+const SAMPLES_DIR = path.resolve(WORKSPACE_ROOT, "samples");
+const CLAW_SCRIPTS_DIR = path.resolve(WORKSPACE_ROOT, "resources/claw-hwp/scripts");
+const SKILLS_DIR = path.resolve(WORKSPACE_ROOT, "resources/skills");
+const SKILLS_BIN_DIR = path.resolve(SKILLS_DIR, "bin");
 
-function collectFontFiles(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  const entries = readdirSync(dir, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    const fullPath = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...collectFontFiles(fullPath));
-    } else if (entry.isFile() && extname(entry.name).toLowerCase() === ".woff2") {
-      files.push(fullPath);
-    }
+function getStagingDir(): string {
+  const dir = path.join(os.tmpdir(), "hop_claw_staging");
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
-  return files;
+  return dir;
 }
 
-function hopFontAssets(): Plugin {
+function computeFileHash(filePath: string): { exists: boolean; mtimeMs: number; size: number; sha256: string } {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return { exists: false, mtimeMs: 0, size: 0, sha256: "" };
+  }
+  const stat = fs.statSync(filePath);
+  const bytes = fs.readFileSync(filePath);
+  const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
   return {
-    name: "hop-font-assets",
-    configureServer(server) {
-      server.middlewares.use("/fonts", (req, res, next) => {
-        handleFontAssetRequest(fontsDir, req.url, res, next);
-      });
-    },
-    writeBundle(options) {
-      const outDir = options.dir ? resolve(rootDir, options.dir) : resolve(rootDir, "dist");
-      for (const source of collectFontFiles(fontsDir)) {
-        const target = resolve(outDir, "fonts", relative(fontsDir, source));
-        mkdirSync(resolve(target, ".."), { recursive: true });
-        copyFileSync(source, target);
-      }
-    },
+    exists: true,
+    mtimeMs: Math.round(stat.mtimeMs),
+    size: stat.size,
+    sha256,
   };
 }
 
-function resolveLocalPath(p: string): string {
-  if (!p) return "";
-  return isAbsolute(p) ? p : resolve(rootDir, p);
-}
-
-function runClawStdin(scriptName: string, stdinJson: string): Promise<{ ok: boolean; stdout_json: any; stderr: string }> {
+function runNodeScript(
+  scriptPath: string,
+  args: string[] = [],
+  stdinData?: string,
+  extraEnv?: Record<string, string>
+): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const scriptPath = resolve(clawScriptsDir, scriptName);
-    const child = spawn("node", [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn("node", [scriptPath, ...args], {
+      cwd: WORKSPACE_ROOT,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...extraEnv },
+    });
     const outChunks: Buffer[] = [];
     const errChunks: Buffer[] = [];
     child.stdout.on("data", (d) => outChunks.push(Buffer.from(d)));
     child.stderr.on("data", (d) => errChunks.push(Buffer.from(d)));
     child.on("error", (err) => rejectPromise(err));
     child.on("close", (code) => {
-      const stdoutStr = Buffer.concat(outChunks).toString("utf8").trim();
-      const stderrStr = Buffer.concat(errChunks).toString("utf8");
-      let parsed: any;
-      try {
-        parsed = JSON.parse(stdoutStr);
-      } catch {
-        parsed = { status: "error", raw_stdout: stdoutStr, stderr: stderrStr };
-      }
-      const ok = code === 0 && (parsed?.status === "success" || parsed?.ok === true);
-      resolvePromise({ ok, stdout_json: parsed, stderr: stderrStr });
+      resolvePromise({
+        code: code ?? 0,
+        stdout: Buffer.concat(outChunks).toString("utf8"),
+        stderr: Buffer.concat(errChunks).toString("utf8"),
+      });
     });
-    child.stdin.write(stdinJson, "utf8");
+    if (stdinData !== undefined) {
+      child.stdin.write(stdinData);
+    }
     child.stdin.end();
   });
 }
 
-const activeHttpRequests = new ActiveHttpRequests();
+function runShellCommand(
+  commandLine: string,
+  envVars: Record<string, string>,
+  timeoutMs = 30000
+): Promise<{ exitCode: number; stdout: string; stderr: string; durationMs: number }> {
+  return new Promise((resolvePromise) => {
+    const startTime = Date.now();
+    const pathEnv = `${SKILLS_BIN_DIR}:${process.env.PATH || ""}`;
+    const child = spawn("bash", ["-c", commandLine], {
+      cwd: WORKSPACE_ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        ...envVars,
+        PATH: pathEnv,
+        HWP_SKILLS_DIR: SKILLS_DIR,
+        HWP_CLAW_SCRIPTS_DIR: CLAW_SCRIPTS_DIR,
+        HWP_WORKSPACE_ROOT: WORKSPACE_ROOT,
+      },
+    });
+    const outChunks: Buffer[] = [];
+    const errChunks: Buffer[] = [];
+    let killed = false;
+    const timer = setTimeout(() => {
+      killed = true;
+      child.kill("SIGTERM");
+    }, timeoutMs);
 
-function localClawBridgePlugin(): Plugin {
-  return {
-    name: "hop-local-claw-bridge",
-    configureServer(server) {
-      server.middlewares.use("/__hop_claw_api/", async (req, res) => {
-        const cmd = decodeURIComponent((req.url ?? "").split("?")[0].replace(/^\/+/, ""));
-        const chunks: Buffer[] = [];
-        req.on("data", (c) => chunks.push(Buffer.from(c)));
-        req.on("end", async () => {
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
-          try {
-            const bodyStr = Buffer.concat(chunks).toString("utf8");
-            const args = bodyStr ? JSON.parse(bodyStr) : {};
-            mkdirSync(stagingDir, { recursive: true });
-
-            let result: any = null;
-
-            switch (cmd) {
-              case "open_document_session": {
-                const srcPath = resolveLocalPath(args.filePath || args.file_path);
-                if (!existsSync(srcPath)) {
-                  throw new Error(`파일을 찾을 수 없습니다: ${srcPath}`);
-                }
-                const bytes = readFileSync(srcPath);
-                const hasZipSignature = bytes.length >= 4
-                  && bytes[0] === 0x50 && bytes[1] === 0x4b
-                  && bytes[2] === 0x03 && bytes[3] === 0x04;
-                const requestedHwpx = extname(srcPath).toLowerCase() === ".hwpx";
-                const isHwpx = hasZipSignature
-                  ? isValidHwpxPackage(new Uint8Array(bytes))
-                  : false;
-                if (hasZipSignature && !isHwpx) {
-                  throw new Error("유효한 HWPX(OWPML) 패키지가 아닙니다. 일반 ZIP 또는 손상된 문서는 열 수 없습니다.");
-                }
-                if (requestedHwpx && !isHwpx) {
-                  throw new Error("HWPX 파일의 ZIP/OWPML 패키지 구조가 손상되었거나 올바르지 않습니다.");
-                }
-                const ext = isHwpx ? "hwpx" : "hwp";
-                const stagingPath = resolve(stagingDir, `staging_${randomUUID()}.${ext}`);
-                writeFileSync(stagingPath, bytes);
-                result = {
-                  original_path: srcPath,
-                  staging_path: stagingPath,
-                  file_name: basename(srcPath),
-                  is_hwpx: isHwpx,
-                  bytes: Array.from(bytes),
-                };
-                break;
-              }
-
-              case "create_blank_session": {
-                const isHwpx = Boolean(args.isHwpx ?? args.is_hwpx);
-                const ext = isHwpx ? "hwpx" : "hwp";
-                const stagingPath = resolve(stagingDir, `new_${randomUUID()}.${ext}`);
-                result = {
-                  original_path: "",
-                  staging_path: stagingPath,
-                  file_name: `새 문서.${ext}`,
-                  is_hwpx: isHwpx,
-                  bytes: [],
-                };
-                break;
-              }
-
-              case "read_file_bytes":
-              case "read_attachment_bytes": {
-                const target = resolveLocalPath(args.filePath || args.file_path);
-                const bytes = readFileSync(target);
-                result = Array.from(bytes);
-                break;
-              }
-
-              case "write_file_bytes": {
-                const target = resolveLocalPath(args.filePath || args.file_path);
-                writeFileSync(target, Buffer.from(args.bytes || []));
-                result = null;
-                break;
-              }
-
-              case "commit_staging_to_original": {
-                const stg = resolveLocalPath(args.stagingPath || args.staging_path);
-                const orig = args.originalPath || args.original_path;
-                const target = orig && orig.trim() ? resolveLocalPath(orig) : resolve(stagingDir, `saved_${basename(stg)}`);
-                copyFileAtomically(stg, target);
-                result = target;
-                break;
-              }
-
-              case "get_startup_file": {
-                const defaultLessonSample = resolve(rootDir, "samples/(날짜)(교시)(과목명)교수.학습과정안(이름).hwp");
-                const defaultOfficialSample = resolve(rootDir, "samples/demo_official_report.hwp");
-                if (existsSync(defaultLessonSample)) {
-                  result = defaultLessonSample;
-                } else if (existsSync(defaultOfficialSample)) {
-                  result = defaultOfficialSample;
-                } else {
-                  result = null;
-                }
-                break;
-              }
-
-              case "inspect_document": {
-                const target = resolveLocalPath(args.filePath || args.file_path);
-                const script = resolve(clawScriptsDir, "extract_text.js");
-                const stdout = execFileSync("node", [script, "--inspect", "--with-cell-text", target], {
-                  encoding: "utf8",
-                  maxBuffer: 20 * 1024 * 1024,
-                });
-                result = JSON.parse(stdout);
-                break;
-              }
-
-              case "extract_markdown": {
-                const target = resolveLocalPath(args.filePath || args.file_path);
-                const script = resolve(clawScriptsDir, "extract_text.js");
-                const stdout = execFileSync("node", [script, "--format", "markdown", target], {
-                  encoding: "utf8",
-                  maxBuffer: 20 * 1024 * 1024,
-                });
-                result = stdout;
-                break;
-              }
-
-              case "execute_claw_ops": {
-                const isHwpx = Boolean(args.isHwpx ?? args.is_hwpx);
-                const payloadJson = String(args.payloadJson ?? args.payload_json ?? "{}");
-                const scriptName = isHwpx ? "hwpx-edit.js" : "create.js";
-                result = await runClawStdin(scriptName, payloadJson);
-                break;
-              }
-
-              case "call_llm_http": {
-                const reqObj = args.req || args;
-                const rawRequestId = reqObj.request_id || reqObj.requestId;
-                const reqId = typeof rawRequestId === "string" && rawRequestId.length > 0
-                  ? rawRequestId
-                  : undefined;
-                const endpoint = validateLlmEndpoint(reqObj.url);
-                const body = serializeBoundedRequestBody(reqObj.body_json ?? {});
-                const timeoutMs = normalizeLlmTimeoutMs(reqObj.timeout_ms ?? reqObj.timeoutMs);
-                const headers = new Headers(reqObj.headers || {});
-                if (!headers.has("content-type")) {
-                  headers.set("Content-Type", "application/json");
-                }
-
-                const controller = new AbortController();
-                if (reqId) {
-                  activeHttpRequests.register(reqId, controller);
-                }
-                const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-                try {
-                  const resp = await fetch(endpoint, {
-                    method: "POST",
-                    headers,
-                    body,
-                    signal: controller.signal,
-                    redirect: "manual",
-                  });
-                  const status = resp.status;
-                  const text = await readBoundedResponseText(resp);
-                  let parsedBody: any;
-                  try {
-                    parsedBody = JSON.parse(text);
-                  } catch {
-                    parsedBody = { raw_text: text };
-                  }
-                  result = { status, body: parsedBody };
-                } catch (fetchErr: any) {
-                  if (fetchErr.name === "AbortError" || controller.signal.aborted) {
-                    throw new Error("LLM 요청이 사용자에 의해 취소되었거나 타임아웃되었습니다.");
-                  }
-                  throw fetchErr;
-                } finally {
-                  clearTimeout(timer);
-                  if (reqId) {
-                    activeHttpRequests.cleanup(reqId, controller);
-                  }
-                }
-                break;
-              }
-
-              case "cancel_llm_request": {
-                const rawRequestId = args.request_id || args.requestId;
-                result = typeof rawRequestId === "string" && rawRequestId.length > 0
-                  ? activeHttpRequests.cancel(rawRequestId)
-                  : false;
-                break;
-              }
-
-              default:
-                throw new Error(`Unknown command: ${cmd}`);
-            }
-
-            res.statusCode = 200;
-            res.end(JSON.stringify({ result }));
-          } catch (err: any) {
-            res.statusCode = 200;
-            res.end(JSON.stringify({ __hop_error: err?.message || String(err) }));
-          }
-        });
+    child.stdout.on("data", (d) => outChunks.push(Buffer.from(d)));
+    child.stderr.on("data", (d) => errChunks.push(Buffer.from(d)));
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolvePromise({
+        exitCode: 1,
+        stdout: "",
+        stderr: String(err.message || err),
+        durationMs: Date.now() - startTime,
       });
-    },
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const stderrStr = Buffer.concat(errChunks).toString("utf8");
+      resolvePromise({
+        exitCode: killed ? 124 : (code ?? 0),
+        stdout: Buffer.concat(outChunks).toString("utf8"),
+        stderr: killed ? `${stderrStr}\n[Timeout after ${timeoutMs}ms]` : stderrStr,
+        durationMs: Date.now() - startTime,
+      });
+    });
+  });
+}
+
+function hopClawLocalBridgePlugin(): Plugin {
+  const configure = (server: any) => {
+    // 1. Serve /fonts/* from /assets/fonts/*
+    server.middlewares.use("/fonts", (req: any, res: any, next: any) => {
+      handleFontAssetRequest(FONTS_DIR, req.url, res, next);
+    });
+
+    // 2. Serve /samples/* from /samples/*
+    server.middlewares.use("/samples", (req: any, res: any, next: any) => {
+      const rawUrl = decodeURIComponent((req.url || "/").split("?")[0]);
+      const safeRel = rawUrl.replace(/^\/+/, "");
+      const candidate = path.resolve(SAMPLES_DIR, safeRel);
+      if (!candidate.startsWith(SAMPLES_DIR) || !fs.existsSync(candidate) || fs.statSync(candidate).isDirectory()) {
+        next();
+        return;
+      }
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.end(fs.readFileSync(candidate));
+    });
+
+    // 3. Handle /__hop_claw_api/* RPC commands
+    server.middlewares.use("/__hop_claw_api", (req: any, res: any) => {
+      if (req.method !== "POST") {
+        res.statusCode = 405;
+        res.end("Method Not Allowed");
+        return;
+      }
+      const cmd = decodeURIComponent((req.url || "").replace(/^\/+/, "").split("?")[0]);
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+      req.on("end", async () => {
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        try {
+          const rawBody = Buffer.concat(chunks).toString("utf8");
+          const args = rawBody ? JSON.parse(rawBody) : {};
+          let result: any = null;
+
+          switch (cmd) {
+            case "get_startup_file": {
+              result = process.env.HOP_STARTUP_FILE || null;
+              break;
+            }
+            case "pick_local_file": {
+              result = args.defaultPath || null;
+              break;
+            }
+            case "get_workspace_info": {
+              result = {
+                workspaceRoot: WORKSPACE_ROOT,
+                skillsDir: SKILLS_DIR,
+                skillsBinDir: SKILLS_BIN_DIR,
+                clawScriptsDir: CLAW_SCRIPTS_DIR,
+                samplesDir: SAMPLES_DIR,
+                stagingDir: getStagingDir(),
+              };
+              break;
+            }
+            case "list_sample_files": {
+              const files = fs.existsSync(SAMPLES_DIR)
+                ? fs.readdirSync(SAMPLES_DIR).filter((f) => /\.(hwp|hwpx|xlsx|docx|pdf)$/i.test(f))
+                : [];
+              result = files.map((f) => ({
+                name: f,
+                path: path.join(SAMPLES_DIR, f),
+                isHwpx: /\.hwpx$/i.test(f),
+              }));
+              break;
+            }
+            case "create_staging_session": {
+              const rawPath = String(args.originalPath || "");
+              const resolvedOrig = path.isAbsolute(rawPath)
+                ? rawPath
+                : path.resolve(WORKSPACE_ROOT, rawPath);
+              if (!fs.existsSync(resolvedOrig)) {
+                throw new Error(`원본 파일이 존재하지 않습니다: ${resolvedOrig}`);
+              }
+              const fileName = path.basename(resolvedOrig);
+              const isHwpx = /\.hwpx$/i.test(fileName);
+              const ts = Date.now();
+              const stagingPath = path.join(getStagingDir(), `staging_${ts}_${fileName}`);
+              fs.copyFileSync(resolvedOrig, stagingPath);
+              result = {
+                original_path: resolvedOrig,
+                staging_path: stagingPath,
+                file_name: fileName,
+                is_hwpx: isHwpx,
+              };
+              break;
+            }
+            case "create_blank_staging_session": {
+              const rawFormat = String(args.format || "hwpx").toLowerCase();
+              const isHwpx = rawFormat === "hwpx";
+              const ext = isHwpx ? "hwpx" : "hwp";
+              const ts = Date.now();
+              const fileName = `새_문서_${ts}.${ext}`;
+              const stagingPath = path.join(getStagingDir(), `staging_${ts}_${fileName}`);
+
+              const createScript = path.join(CLAW_SCRIPTS_DIR, "create.js");
+              const spec = JSON.stringify({
+                format: ext,
+                output: stagingPath,
+                sections: [{ type: "paragraph", text: "" }],
+              });
+              const createRes = await runNodeScript(createScript, [], spec);
+              if (createRes.code !== 0 || !fs.existsSync(stagingPath)) {
+                const stubPath = path.join(CLAW_SCRIPTS_DIR, "templates/hancom_native_stub.hwpx");
+                if (isHwpx && fs.existsSync(stubPath)) {
+                  fs.copyFileSync(stubPath, stagingPath);
+                } else {
+                  throw new Error(`빈 문서 생성 실패: ${createRes.stderr || createRes.stdout}`);
+                }
+              }
+              result = {
+                original_path: "",
+                staging_path: stagingPath,
+                file_name: `새 문서.${ext}`,
+                is_hwpx: isHwpx,
+              };
+              break;
+            }
+            case "read_file_bytes": {
+              const targetPath = path.isAbsolute(String(args.filePath || ""))
+                ? String(args.filePath)
+                : path.resolve(WORKSPACE_ROOT, String(args.filePath || ""));
+              if (!fs.existsSync(targetPath)) {
+                throw new Error(`파일을 찾을 수 없습니다: ${targetPath}`);
+              }
+              const buf = fs.readFileSync(targetPath);
+              result = Array.from(buf);
+              break;
+            }
+            case "write_file_bytes": {
+              const targetPath = path.isAbsolute(String(args.filePath || ""))
+                ? String(args.filePath)
+                : path.resolve(WORKSPACE_ROOT, String(args.filePath || ""));
+              const dir = path.dirname(targetPath);
+              if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+              }
+              fs.writeFileSync(targetPath, Buffer.from(args.bytes || []));
+              result = true;
+              break;
+            }
+            case "commit_staging_to_original": {
+              const stagingPath = String(args.stagingPath || "");
+              let originalPath = String(args.originalPath || "").trim();
+              if (!originalPath) {
+                const fileName = path.basename(stagingPath).replace(/^staging_\d+_/, "");
+                originalPath = path.join(getStagingDir(), `saved_${fileName}`);
+              }
+              fs.copyFileSync(stagingPath, originalPath);
+              result = originalPath;
+              break;
+            }
+            case "check_staging_status": {
+              const stagingPath = String(args.stagingPath || "");
+              result = computeFileHash(stagingPath);
+              break;
+            }
+            case "extract_markdown": {
+              const filePath = path.isAbsolute(String(args.filePath || ""))
+                ? String(args.filePath)
+                : path.resolve(WORKSPACE_ROOT, String(args.filePath || ""));
+              const extractScript = path.join(CLAW_SCRIPTS_DIR, "extract_text.js");
+              const resOut = await runNodeScript(extractScript, [filePath, "--markdown"]);
+              if (resOut.code !== 0) {
+                throw new Error(`extract_markdown failed: ${resOut.stderr}`);
+              }
+              result = resOut.stdout;
+              break;
+            }
+            case "inspect_document": {
+              const filePath = path.isAbsolute(String(args.filePath || ""))
+                ? String(args.filePath)
+                : path.resolve(WORKSPACE_ROOT, String(args.filePath || ""));
+              const extractScript = path.join(CLAW_SCRIPTS_DIR, "extract_text.js");
+              const resOut = await runNodeScript(extractScript, [filePath, "--json"]);
+              if (resOut.code !== 0) {
+                throw new Error(`inspect_document failed: ${resOut.stderr}`);
+              }
+              result = JSON.parse(resOut.stdout);
+              break;
+            }
+            case "execute_claw_ops": {
+              const isHwpx = Boolean(args.isHwpx);
+              const payloadJson = String(args.payloadJson || "{}");
+              const scriptName = isHwpx ? "hwpx-edit.js" : "cell-patch.js";
+              const scriptPath = path.join(CLAW_SCRIPTS_DIR, scriptName);
+              const resOut = await runNodeScript(scriptPath, [], payloadJson);
+              let parsedJson: any = null;
+              try {
+                parsedJson = JSON.parse(resOut.stdout.trim());
+              } catch {
+                parsedJson = { raw: resOut.stdout.trim() };
+              }
+              result = {
+                ok: resOut.code === 0 && parsedJson?.error === undefined,
+                stdout_json: parsedJson,
+                stderr: resOut.stderr,
+              };
+              break;
+            }
+            case "sync_writing_memory_file": {
+              const content = String(args.content || "");
+              const memPath = path.join(getStagingDir(), "active_writing_memory.md");
+              fs.writeFileSync(memPath, content, "utf8");
+              result = memPath;
+              break;
+            }
+            case "execute_agent_cli_command": {
+              const commandLine = String(args.commandLine || "").trim();
+              const stagingPath = String(args.stagingPath || "");
+              const originalPath = String(args.originalPath || "");
+              const writingMemoryPath = String(args.writingMemoryPath || path.join(getStagingDir(), "active_writing_memory.md"));
+              const selectionContextJson = String(args.selectionContextJson || "");
+              const beforeHash = computeFileHash(stagingPath);
+
+              const execRes = await runShellCommand(commandLine, {
+                HWP_STAGING_PATH: stagingPath,
+                HWP_ORIGINAL_PATH: originalPath,
+                HWP_WRITING_MEMORY_PATH: writingMemoryPath,
+                HWP_SELECTION_JSON: selectionContextJson,
+              });
+              const afterHash = computeFileHash(stagingPath);
+              const stagingModified =
+                beforeHash.exists &&
+                afterHash.exists &&
+                beforeHash.sha256 !== afterHash.sha256;
+
+              result = {
+                ...execRes,
+                stagingModified,
+                afterSha256: afterHash.sha256,
+              };
+              break;
+            }
+            default:
+              throw new Error(`알 수 없는 브리지 명령: ${cmd}`);
+          }
+
+          res.statusCode = 200;
+          res.end(JSON.stringify({ result }));
+        } catch (err: any) {
+          res.statusCode = 200;
+          res.end(
+            JSON.stringify({
+              __hop_error: err instanceof Error ? err.message : String(err),
+            })
+          );
+        }
+      });
+    });
+  };
+
+  return {
+    name: "hop-claw-local-bridge",
+    configureServer: configure,
+    configurePreviewServer: configure,
   };
 }
 
 export default defineConfig({
-  plugins: [react(), hopFontAssets(), localClawBridgePlugin()],
-  clearScreen: false,
+  plugins: [react(), hopClawLocalBridgePlugin()],
+  define: {
+    __RHWP_HWPCTRL__: false,
+  },
   resolve: {
     alias: [
-      ...createHopOverrides(hopSrc),
-      {
-        find: "@wasm/rhwp.js",
-        replacement: resolve(wasmDir, "rhwp.js"),
-      },
       {
         find: "@/upstream",
-        replacement: resolve(hopSrc, "upstream"),
+        replacement: path.resolve(HOP_HOST_SRC, "upstream"),
+      },
+      ...createHopOverrides(HOP_HOST_SRC),
+      {
+        find: /^@\//,
+        replacement: `${RHWP_STUDIO_SRC}/`,
       },
       {
         find: "@upstream",
-        replacement: upstreamSrc,
+        replacement: RHWP_STUDIO_SRC,
       },
       {
-        find: "@",
-        replacement: upstreamSrc,
+        find: "@wasm",
+        replacement: path.resolve(WORKSPACE_ROOT, "public/vendor/rhwp"),
       },
     ],
   },
   server: {
-    port: 1420,
-    strictPort: true,
-    fs: {
-      allow: [rootDir, hopSrc, upstreamSrc, wasmDir, fontsDir],
-    },
-    watch: {
-      ignored: ["**/src-tauri/**", "**/.hop-staging/**"],
-    },
+    port: 3000,
+    host: "0.0.0.0",
+    hmr: false,
   },
-  optimizeDeps: {
-    exclude: ["@wasm/rhwp.js"],
+  preview: {
+    port: 3000,
+    host: "0.0.0.0",
   },
 });

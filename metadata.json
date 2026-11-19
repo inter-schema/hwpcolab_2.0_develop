@@ -1,0 +1,5 @@
+{
+  "name": "HOP-Claw — 에이전트 CLI 기반 한글(HWP/HWPX) 협업 IDE",
+  "description": "rhwp-studio 에디터 코어, 통합 중첩 표 생성, 시각적 문서 Diff 비교 엔진, 내장 도킹형 에이전트 CLI 터미널 및 로컬 HWP/HWPX 스킬 패키지를 결합한 오픈소스(GNU GPL v3.0) 한글 문서 IDE 워크스페이스입니다.",
+  "requestFramePermissions": []
+}
