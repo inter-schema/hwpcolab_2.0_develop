@@ -88,6 +88,7 @@ export const AgentCliPanel: React.FC = () => {
     setActiveCliTab,
     clearCliHistory,
     runCliCommand,
+    runSkillCommand,
     checkExternalStagingModification,
     syncWritingMemoryFileToDisk,
     showToastMessage,
@@ -175,9 +176,13 @@ export const AgentCliPanel: React.FC = () => {
     await runCliCommand(cmd, activeCliPreset);
   };
 
-  const handleQuickSkill = async (cmd: string) => {
+  const handleQuickSkillArgs = async (
+    skill: "ref-extract" | "hwp-cli",
+    args: string[],
+    displayCommand?: string
+  ) => {
     if (cliRunning) return;
-    await runCliCommand(cmd, "hwp-shell");
+    await runSkillCommand(skill, args, displayCommand);
   };
 
   const handleInjectSelectionContext = () => {
@@ -214,7 +219,12 @@ export const AgentCliPanel: React.FC = () => {
           extensions: ["hwp", "hwpx", "docx", "xlsx", "xls", "csv", "pdf", "md", "txt"],
         });
         if (picked) {
-          await handleQuickSkill(`ref-extract "${picked}" --format markdown`);
+          const baseName = picked.split(/[\\/]/).pop() || picked;
+          await handleQuickSkillArgs(
+            "ref-extract",
+            [picked, "--format", "markdown"],
+            `ref-extract "${baseName}" --format markdown`
+          );
         }
         return;
       } catch {
@@ -228,17 +238,22 @@ export const AgentCliPanel: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (refFileInputRef.current) refFileInputRef.current.value = "";
-    // Save uploaded reference file to a temporary staging file and run ref-extract
+    // Save uploaded reference file to a temporary staging file and run ref-extract via argument array
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const session = await invoke<{ staging_path: string }>("create_blank_session", {
         isHwpx: file.name.toLowerCase().endsWith(".hwpx"),
+        fileName: file.name,
       });
       await invoke("write_file_bytes", {
         filePath: session.staging_path,
         bytes: Array.from(bytes),
       });
-      await handleQuickSkill(`ref-extract "${session.staging_path}" --format markdown`);
+      await handleQuickSkillArgs(
+        "ref-extract",
+        [session.staging_path, "--format", "markdown"],
+        `ref-extract "${file.name}" --format markdown`
+      );
     } catch (err: any) {
       showToastMessage(`참고자료 추출 실패: ${err?.message || err}`);
     }
@@ -552,11 +567,17 @@ export const AgentCliPanel: React.FC = () => {
           </button>
         </div>
 
-        {/* Built-in hwp-cli Skill One-Click Actions */}
+        {/* Built-in hwp-cli Skill One-Click Actions (argument-array execution, no shell interpolation) */}
         <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
           <button
             disabled={!stagingPath || cliRunning}
-            onClick={() => void handleQuickSkill(`hwp-cli inspect "$HWP_STAGING_PATH"`)}
+            onClick={() =>
+              void handleQuickSkillArgs(
+                "hwp-cli",
+                ["inspect", "$HWP_STAGING_PATH"],
+                `hwp-cli inspect "$HWP_STAGING_PATH"`
+              )
+            }
             className="flex items-center gap-1 px-2 py-1 rounded bg-[#161B22] hover:bg-[#1F242C] text-[#C9D1D9] border border-[#30363D] text-[11px] disabled:opacity-40 transition-colors"
             title="hwp-cli inspect: 문서 구조·표·셀 인덱스 JSON 조회"
           >
@@ -566,9 +587,15 @@ export const AgentCliPanel: React.FC = () => {
 
           <button
             disabled={!stagingPath || cliRunning}
-            onClick={() => void handleQuickSkill(`hwp-cli check-layout "$HWP_STAGING_PATH"`)}
+            onClick={() =>
+              void handleQuickSkillArgs(
+                "hwp-cli",
+                ["layout-check", "$HWP_STAGING_PATH"],
+                `hwp-cli layout-check "$HWP_STAGING_PATH"`
+              )
+            }
             className="flex items-center gap-1 px-2 py-1 rounded bg-[#161B22] hover:bg-[#1F242C] text-[#C9D1D9] border border-[#30363D] text-[11px] disabled:opacity-40 transition-colors"
-            title="hwp-cli check-layout: 페이지 오버플로우·누락 항목 진단"
+            title="hwp-cli layout-check: 페이지 오버플로우·누락 항목 진단"
           >
             <CheckCircle2 className="w-3 h-3 text-emerald-400" />
             <span>레이아웃 진단</span>
@@ -576,9 +603,15 @@ export const AgentCliPanel: React.FC = () => {
 
           <button
             disabled={!stagingPath || cliRunning}
-            onClick={() => void handleQuickSkill(`hwp-cli fix-official-rules "$HWP_STAGING_PATH"`)}
+            onClick={() =>
+              void handleQuickSkillArgs(
+                "hwp-cli",
+                ["official-format", "$HWP_STAGING_PATH", "--apply"],
+                `hwp-cli official-format "$HWP_STAGING_PATH" --apply`
+              )
+            }
             className="flex items-center gap-1 px-2 py-1 rounded bg-[#161B22] hover:bg-[#1F242C] text-[#C9D1D9] border border-[#30363D] text-[11px] disabled:opacity-40 transition-colors"
-            title="hwp-cli fix-official-rules: 행정안전부 공문서 표기·날짜·연락처·붙임 규격 자동 교정"
+            title="hwp-cli official-format: 행정안전부 공문서 항목 위계·줄간격(160%) 점검 및 교정"
           >
             <Sparkles className="w-3 h-3 text-amber-400" />
             <span>공문서 규격 교정</span>
@@ -588,8 +621,23 @@ export const AgentCliPanel: React.FC = () => {
             <button
               disabled={!stagingPath || cliRunning}
               onClick={() =>
-                void handleQuickSkill(
-                  `hwp-cli insert-nested-table "$HWP_STAGING_PATH" --table ${selection.tableIndex} --row ${selection.startRow} --col ${selection.startCol} --rows 2 --cols 2`
+                void handleQuickSkillArgs(
+                  "hwp-cli",
+                  [
+                    "nested-table",
+                    "$HWP_STAGING_PATH",
+                    "--table",
+                    String(selection.tableIndex),
+                    "--row",
+                    String(selection.startRow),
+                    "--col",
+                    String(selection.startCol),
+                    "--rows",
+                    "2",
+                    "--cols",
+                    "2",
+                  ],
+                  `hwp-cli nested-table "$HWP_STAGING_PATH" --table ${selection.tableIndex} --row ${selection.startRow} --col ${selection.startCol} --rows 2 --cols 2`
                 )
               }
               className="flex items-center gap-1 px-2 py-1 rounded bg-teal-950/60 hover:bg-teal-900/70 text-teal-300 border border-teal-700/60 text-[11px] disabled:opacity-40 transition-colors"

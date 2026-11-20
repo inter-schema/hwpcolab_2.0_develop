@@ -27,6 +27,7 @@ pub fn run() {
             check_staging_status,
             sync_writing_memory_file,
             execute_agent_cli_command,
+            execute_skill_command,
             read_attachment_bytes,
         ])
         .run(tauri::generate_context!())

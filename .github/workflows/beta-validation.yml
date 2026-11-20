@@ -1,6 +1,7 @@
 name: Beta validation
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main, Beta]
     types: [opened, synchronize, reopened, edited]
@@ -30,8 +31,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Format changed Rust sources
-        run: rustfmt --edition 2021 --config skip_children=true src-tauri/src/commands/attachment.rs src-tauri/src/commands/document.rs src-tauri/src/commands/fonts.rs src-tauri/src/commands/llm_proxy.rs src-tauri/src/commands/mod.rs src-tauri/src/font_catalog.rs src-tauri/src/hwpx_package.rs src-tauri/src/lib.rs
+      - name: Format Rust sources
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml
       - name: Generate Cargo lockfile
         run: cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
       - name: Commit lockfiles when changed
@@ -39,7 +40,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json src-tauri/Cargo.lock src-tauri/src/commands/attachment.rs src-tauri/src/commands/document.rs src-tauri/src/commands/fonts.rs src-tauri/src/commands/llm_proxy.rs src-tauri/src/commands/mod.rs src-tauri/src/font_catalog.rs src-tauri/src/hwpx_package.rs src-tauri/src/lib.rs
+          git add package-lock.json src-tauri/Cargo.lock src-tauri/src
           if git diff --cached --quiet; then
             echo "Dependency lockfiles are already up to date."
             exit 0
@@ -69,6 +70,8 @@ jobs:
         run: npm audit --audit-level=high
       - name: Run unit tests
         run: npm test
+      - name: Typecheck frontend
+        run: npm run lint
       - name: Build frontend
         run: npm run build
 
@@ -85,8 +88,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Check formatting of changed Rust sources
-        run: rustfmt --check --edition 2021 --config skip_children=true src-tauri/src/commands/attachment.rs src-tauri/src/commands/document.rs src-tauri/src/commands/fonts.rs src-tauri/src/commands/llm_proxy.rs src-tauri/src/commands/mod.rs src-tauri/src/font_catalog.rs src-tauri/src/hwpx_package.rs src-tauri/src/lib.rs
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Run Clippy
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings
       - name: Run Rust tests with committed lockfile

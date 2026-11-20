@@ -18,7 +18,10 @@ const __dirname = path.dirname(__filename);
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 const CLAW_SCRIPTS_DIR = path.resolve(WORKSPACE_ROOT, "resources/claw-hwp/scripts");
 const FFLATE_PATH = path.resolve(CLAW_SCRIPTS_DIR, "vendor/fflate/index.mjs");
+const SECURITY_GUARD_PATH = path.resolve(CLAW_SCRIPTS_DIR, "security-guard.mjs");
 const RHWP_VENDOR_DIR = path.resolve(CLAW_SCRIPTS_DIR, "vendor/rhwp");
+
+const securityGuardPromise = import(pathToFileURL(SECURITY_GUARD_PATH).href);
 
 function runNodeScript(scriptPath, args = [], stdinData) {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -71,7 +74,8 @@ function runPythonScript(scriptPath, args = []) {
  */
 async function parseHwpxTablesHierarchy(fileBytes) {
   const fflate = await import(pathToFileURL(FFLATE_PATH).href);
-  const unzipped = fflate.unzipSync(new Uint8Array(fileBytes));
+  const { safeUnzipHwpxBytes } = await securityGuardPromise;
+  const unzipped = safeUnzipHwpxBytes(new Uint8Array(fileBytes), "hwp-cli-inspect");
   const sectionFiles = Object.keys(unzipped)
     .filter((name) => /^Contents\/section\d+\.xml$/i.test(name))
     .sort();
@@ -166,8 +170,10 @@ async function parseHwpxTablesHierarchy(fileBytes) {
 
 /**
  * Policy Guard Static Lint for unified edit operations.
+ * Mirrors engine-level rules (G2 excluded regions, G4 existing-doc guard,
+ * nested table depth/size limits, table coordinate bounds).
  */
-export function lintOperations(ops, tablesMeta = [], isHwpx = true) {
+export function lintOperations(ops, tablesMeta = [], isHwpx = true, policyContext = {}) {
   const errors = [];
   const warnings = [];
   if (!Array.isArray(ops) || ops.length === 0) {
@@ -193,9 +199,23 @@ export function lintOperations(ops, tablesMeta = [], isHwpx = true) {
     "table_style",
   ]);
 
+  const isNewDocument = Boolean(policyContext.isNewDocument);
+  const excludedRegions = Array.isArray(policyContext.excludedRegions)
+    ? policyContext.excludedRegions
+    : [];
+  const excludedCellKeys = new Set(
+    excludedRegions
+      .filter((r) => r && r.targetType === "cell")
+      .map((r) => `${Number(r.tableIndex)}:${Number(r.row)}:${Number(r.col)}`)
+  );
+
   for (let i = 0; i < ops.length; i++) {
     const op = ops[i];
     const kind = op.type || op.op;
+    if (kind === "setup_document" && !isNewDocument) {
+      errors.push(`연산 #${i} (G4 위반): 기존 문서에 setup_document를 실행할 수 없습니다.`);
+      continue;
+    }
     if (!kind || !ALLOWED_TYPES.has(kind)) {
       errors.push(`연산 #${i}: 지원하지 않는 연산 타입입니다 (${kind || "undefined"}).`);
       continue;
@@ -203,12 +223,15 @@ export function lintOperations(ops, tablesMeta = [], isHwpx = true) {
 
     if (kind === "insert_nested_table") {
       if (!isHwpx) {
-        errors.push(`연산 #${i} (insert_nested_table): 중첩 표는 HWPX 문서에서만 지원됩니다.`);
+        errors.push(`연산 #${i} (insert_nested_table): HWP 바이너리는 중첩 표 미지원 — HWPX로 저장 후 시도`);
       }
       const rows = Number(op.rows ?? 2);
       const cols = Number(op.cols ?? 2);
-      if (rows < 1 || rows > 8 || cols < 1 || cols > 8) {
+      if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 1 || rows > 8 || cols < 1 || cols > 8) {
         errors.push(`연산 #${i} (insert_nested_table): 중첩 표 크기는 1x1 ~ 8x8 범위여야 합니다 (요청: ${rows}x${cols}).`);
+      }
+      if (op.widthMode && op.widthMode !== "fit_cell") {
+        errors.push(`연산 #${i} (insert_nested_table): 지원되지 않는 widthMode입니다 ('fit_cell'만 허용됨).`);
       }
     }
 
@@ -219,15 +242,27 @@ export function lintOperations(ops, tablesMeta = [], isHwpx = true) {
       if (tIdx < 0 || row < 0 || col < 0) {
         errors.push(`연산 #${i} (${kind}): 음수 좌표는 허용되지 않습니다 (table=${tIdx}, row=${row}, col=${col}).`);
       }
+      if (excludedCellKeys.has(`${tIdx}:${row}:${col}`)) {
+        errors.push(`연산 #${i} (G2 위반): 셀 (${tIdx}번 표 [${row}, ${col}])은 사용자가 수정 제외로 지정한 보호 영역입니다.`);
+      }
       if (tablesMeta.length > 0) {
         const tbl = tablesMeta.find((t) => t.tableIndex === tIdx) || tablesMeta[tIdx];
         if (!tbl) {
-          warnings.push(`연산 #${i} (${kind}): 표 #${tIdx}가 현재 감지된 표 목록(총 ${tablesMeta.length}개)에 없습니다.`);
-        } else if (tbl.rowCount > 0 && tbl.colCount > 0) {
-          if (row >= tbl.rowCount || col >= tbl.colCount) {
-            errors.push(
-              `연산 #${i} (${kind}): 표 #${tIdx} 범위(${tbl.rowCount}x${tbl.colCount})를 벗어난 셀 좌표(${row}, ${col})입니다.`
-            );
+          if (kind === "insert_nested_table") {
+            errors.push(`연산 #${i} (insert_nested_table): 대상 표 #${tIdx}를 찾을 수 없습니다.`);
+          } else {
+            warnings.push(`연산 #${i} (${kind}): 표 #${tIdx}가 현재 감지된 표 목록(총 ${tablesMeta.length}개)에 없습니다.`);
+          }
+        } else {
+          if (kind === "insert_nested_table" && (tbl.depth ?? 0) >= 2) {
+            errors.push(`연산 #${i} (insert_nested_table): 중첩 깊이 초과 (최대 depth 2, 현재 depth=${tbl.depth}).`);
+          }
+          if (tbl.rowCount > 0 && tbl.colCount > 0) {
+            if (row >= tbl.rowCount || col >= tbl.colCount) {
+              errors.push(
+                `연산 #${i} (${kind}): 표 #${tIdx} 범위(${tbl.rowCount}x${tbl.colCount})를 벗어난 셀 좌표(${row}, ${col})입니다.`
+              );
+            }
           }
         }
       }

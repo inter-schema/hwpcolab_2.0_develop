@@ -8,8 +8,8 @@ import { OpTranslator } from "../core/opTranslator";
 import { buildTablesMetaForHwpx, mapInspectedTables } from "../core/hwpxTableIndex";
 import { ParsedAttachment } from "../core/multiFileParser";
 import { PrivacySessionMasker } from "../core/privacyMasker";
+import { maskHwpxPackageBytes, unmaskHwpxPackageBytes } from "../core/hwpxPiiBridge";
 import { mapSelectionFromHopContext } from "../core/hitTestSelection";
-import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate";
 import type { MemoryMeta } from "../memory/index.ts";
 import { createMemoryStore, buildMemoryContext } from "../memory/index.ts";
 import { compareDocuments } from "@/compare/diff-engine";
@@ -141,7 +141,12 @@ interface DocState {
   setActiveCliTab: (tabId: string) => void;
   clearCliHistory: () => void;
   runCliCommand: (command: string, preset?: CliPresetId) => Promise<CliTerminalLogEntry>;
-  syncWritingMemoryFileToDisk: () => Promise<string | null>;
+  runSkillCommand: (
+    skill: "ref-extract" | "hwp-cli",
+    args: string[],
+    displayCommand?: string
+  ) => Promise<CliTerminalLogEntry>;
+  syncWritingMemoryFileToDisk: (maskedOverride?: boolean) => Promise<string | null>;
   syncWritingMemoryEnvFile: () => Promise<string | null>;
   showToastMessage: (msg: string | null) => void;
   checkExternalStagingModification: (forceCompare?: boolean) => Promise<boolean>;
@@ -414,21 +419,26 @@ export const useDocStore = create<DocState>((set, get) => ({
   showToastMessage: (toastMessage) => set({ toastMessage }),
   syncWritingMemoryEnvFile: async () => get().syncWritingMemoryFileToDisk(),
 
-  syncWritingMemoryFileToDisk: async () => {
+  syncWritingMemoryFileToDisk: async (maskedOverride?: boolean) => {
     try {
       const store = createMemoryStore();
-      const { activeMemoryIds } = get();
+      const { activeMemoryIds, autoMaskPii, excludedRegions, sessionMasker } = get();
+      const shouldMask = maskedOverride ?? autoMaskPii;
       const activeDocs: any[] = [];
       for (const id of activeMemoryIds) {
         const doc = await store.get(id);
         if (doc) activeDocs.push(doc);
       }
-      const markdown =
+      const rawMarkdown =
         activeDocs.length > 0
-          ? buildMemoryContext(activeDocs)
+          ? buildMemoryContext(activeDocs).text
           : "# 활성화된 작성 메모리가 없습니다.\n";
+      const content = shouldMask
+        ? sessionMasker.maskTextForPrompt(rawMarkdown, excludedRegions, true)
+        : rawMarkdown;
       const filePath = await invoke<string>("sync_writing_memory_file", {
-        content: markdown,
+        content,
+        masked: shouldMask,
       });
       set({ writingMemoryFilePath: filePath });
       return filePath;
@@ -442,11 +452,40 @@ export const useDocStore = create<DocState>((set, get) => ({
     const trimmed = command.trim();
     const usedPreset = preset || get().activeCliPreset;
     await get().syncHopToStaging();
-    const memoryPath = await get().syncWritingMemoryFileToDisk();
-    const { stagingPath, selection, excludedRegions, autoMaskPii, sessionMasker } = get();
+    const { stagingPath, isHwpx, selection, excludedRegions, autoMaskPii, sessionMasker } = get();
+    const memoryPath = await get().syncWritingMemoryFileToDisk(autoMaskPii);
 
     set({ cliRunning: true });
+    let effectiveStagingPath = stagingPath || "";
+    let maskedCopyPath: string | null = null;
+    let excludedCellSnapshots: Record<string, string> = {};
+
     try {
+      // When PII Protection Mode is ON, create a masked temporary HWPX copy so external CLIs
+      // never directly read unmasked PII or excluded cell content from $HWP_STAGING_PATH.
+      if (autoMaskPii && stagingPath && isHwpx) {
+        try {
+          const rawBytesArr = await invoke<number[]>("read_file_bytes", { filePath: stagingPath });
+          const rawBytes = new Uint8Array(rawBytesArr);
+          const { maskedBytes, excludedCellSnapshots: snapshots } = maskHwpxPackageBytes(
+            rawBytes,
+            sessionMasker,
+            excludedRegions,
+            true
+          );
+          maskedCopyPath = `${stagingPath}.masked.hwpx`;
+          excludedCellSnapshots = snapshots;
+          await invoke("write_file_bytes", {
+            filePath: maskedCopyPath,
+            bytes: Array.from(maskedBytes),
+          });
+          effectiveStagingPath = maskedCopyPath;
+        } catch (maskErr) {
+          console.warn("[DocStore] Failed to create masked staging copy:", maskErr);
+          maskedCopyPath = null;
+        }
+      }
+
       const selectionPayload = selection
         ? {
             ...selection,
@@ -471,10 +510,38 @@ export const useDocStore = create<DocState>((set, get) => ({
         stagingMtimeMs?: number;
       }>("execute_agent_cli_command", {
         command: finalCommand,
-        stagingPath: stagingPath || "",
+        stagingPath: effectiveStagingPath,
         writingMemoryPath: memoryPath || "",
         selectionJson: selectionPayload ? JSON.stringify(selectionPayload) : "",
       });
+
+      // If CLI modified the masked staging copy, restore PII tokens & revert any excluded-cell edits
+      // into the real staging file before running Visual Diff Review.
+      let stagingUpdated = Boolean(res.stagingModified);
+      if (maskedCopyPath && stagingPath && res.stagingModified) {
+        try {
+          const editedMaskedArr = await invoke<number[]>("read_file_bytes", {
+            filePath: maskedCopyPath,
+          });
+          const { restoredBytes, revertedExcludedCells } = unmaskHwpxPackageBytes(
+            new Uint8Array(editedMaskedArr),
+            sessionMasker,
+            excludedCellSnapshots
+          );
+          await invoke("write_file_bytes", {
+            filePath: stagingPath,
+            bytes: Array.from(restoredBytes),
+          });
+          stagingUpdated = true;
+          if (revertedExcludedCells.length > 0) {
+            get().showToastMessage(
+              `보호 제외 셀 ${revertedExcludedCells.length}곳의 변경을 차단하고 원래 내용을 유지했습니다.`
+            );
+          }
+        } catch (restoreErr) {
+          console.warn("[DocStore] Failed to unmask edited staging copy:", restoreErr);
+        }
+      }
 
       const entry: CliTerminalLogEntry = {
         id: crypto.randomUUID(),
@@ -494,11 +561,12 @@ export const useDocStore = create<DocState>((set, get) => ({
       }));
 
       // Automatically inspect if staging file was modified by the CLI command
-      await get().checkExternalStagingModification(Boolean(res.stagingModified));
+      await get().checkExternalStagingModification(stagingUpdated);
       return entry;
     } catch (err: any) {
       const entry: CliTerminalLogEntry = {
         id: crypto.randomUUID(),
+        tabId: get().activeCliTabId,
         timestamp: Date.now(),
         command: trimmed,
         stdout: "",
@@ -506,6 +574,140 @@ export const useDocStore = create<DocState>((set, get) => ({
         exitCode: 1,
         durationMs: 0,
         preset: usedPreset,
+      };
+      set((s) => ({
+        cliHistory: [...s.cliHistory, entry],
+        cliRunning: false,
+      }));
+      return entry;
+    }
+  },
+
+  runSkillCommand: async (
+    skill: "ref-extract" | "hwp-cli",
+    args: string[],
+    displayCommand?: string
+  ) => {
+    await get().syncHopToStaging();
+    const { stagingPath, isHwpx, selection, excludedRegions, autoMaskPii, sessionMasker } = get();
+    const memoryPath = await get().syncWritingMemoryFileToDisk(autoMaskPii);
+    const label = displayCommand || `${skill} ${args.join(" ")}`;
+
+    set({ cliRunning: true });
+    let effectiveStagingPath = stagingPath || "";
+    let maskedCopyPath: string | null = null;
+    let excludedCellSnapshots: Record<string, string> = {};
+
+    try {
+      if (skill === "hwp-cli" && autoMaskPii && stagingPath && isHwpx) {
+        try {
+          const rawBytesArr = await invoke<number[]>("read_file_bytes", { filePath: stagingPath });
+          const { maskedBytes, excludedCellSnapshots: snapshots } = maskHwpxPackageBytes(
+            new Uint8Array(rawBytesArr),
+            sessionMasker,
+            excludedRegions,
+            true
+          );
+          maskedCopyPath = `${stagingPath}.masked.hwpx`;
+          excludedCellSnapshots = snapshots;
+          await invoke("write_file_bytes", {
+            filePath: maskedCopyPath,
+            bytes: Array.from(maskedBytes),
+          });
+          effectiveStagingPath = maskedCopyPath;
+        } catch (maskErr) {
+          console.warn("[DocStore] Failed to create masked staging copy for skill:", maskErr);
+          maskedCopyPath = null;
+        }
+      }
+
+      // Substitute $HWP_STAGING_PATH sentinel safely inside argument array without shell expansion
+      const resolvedArgs = args.map((a) =>
+        a === "$HWP_STAGING_PATH" ? effectiveStagingPath : a
+      );
+
+      const selectionPayload = selection
+        ? {
+            ...selection,
+            excludedRegionsCount: excludedRegions.length,
+            autoMaskPii,
+          }
+        : null;
+
+      const res = await invoke<{
+        ok: boolean;
+        exitCode: number;
+        stdout: string;
+        stderr: string;
+        durationMs: number;
+        stagingModified?: boolean;
+        stagingMtimeMs?: number;
+      }>("execute_skill_command", {
+        skill,
+        args: resolvedArgs,
+        stagingPath: effectiveStagingPath,
+        writingMemoryPath: memoryPath || "",
+        selectionJson: selectionPayload ? JSON.stringify(selectionPayload) : "",
+      });
+
+      let stagingUpdated = Boolean(res.stagingModified);
+      if (maskedCopyPath && stagingPath && res.stagingModified) {
+        try {
+          const editedMaskedArr = await invoke<number[]>("read_file_bytes", {
+            filePath: maskedCopyPath,
+          });
+          const { restoredBytes, revertedExcludedCells } = unmaskHwpxPackageBytes(
+            new Uint8Array(editedMaskedArr),
+            sessionMasker,
+            excludedCellSnapshots
+          );
+          await invoke("write_file_bytes", {
+            filePath: stagingPath,
+            bytes: Array.from(restoredBytes),
+          });
+          stagingUpdated = true;
+          if (revertedExcludedCells.length > 0) {
+            get().showToastMessage(
+              `보호 제외 셀 ${revertedExcludedCells.length}곳의 변경을 차단하고 원래 내용을 유지했습니다.`
+            );
+          }
+        } catch (restoreErr) {
+          console.warn("[DocStore] Failed to unmask edited skill staging copy:", restoreErr);
+        }
+      }
+
+      const entry: CliTerminalLogEntry = {
+        id: crypto.randomUUID(),
+        tabId: get().activeCliTabId,
+        timestamp: Date.now(),
+        command: label,
+        stdout: res.stdout || "",
+        stderr: res.stderr || "",
+        exitCode: typeof res.exitCode === "number" ? res.exitCode : res.ok ? 0 : 1,
+        durationMs: res.durationMs || 0,
+        preset: "hwp-shell",
+      };
+
+      set((s) => ({
+        cliHistory: [...s.cliHistory, entry],
+        cliRunning: false,
+      }));
+
+      if (skill === "hwp-cli") {
+        await get().checkExternalStagingModification(stagingUpdated);
+      }
+      return entry;
+    } catch (err: any) {
+      const entry: CliTerminalLogEntry = {
+        id: crypto.randomUUID(),
+        tabId: get().activeCliTabId,
+        timestamp: Date.now(),
+        command: label,
+        stdout: "",
+        stderr: String(err?.message || err),
+        exitCode: 1,
+        durationMs: 0,
+        preset: "hwp-shell",
       };
       set((s) => ({
         cliHistory: [...s.cliHistory, entry],
@@ -587,25 +789,15 @@ export const useDocStore = create<DocState>((set, get) => ({
 
     let finalBytes = stagingDiffBytes;
 
-    // If PII masking tokens exist in the session, restore any [[PII_*]] tokens inside HWPX XML sections
+    // If PII masking tokens exist in the session, restore any [[PII_*]] / [[AI_EXCLUDED_*]] tokens safely
     if (isHwpx && sessionMasker.getTokenMap().length > 0) {
       try {
-        const unzipped = unzipSync(stagingDiffBytes);
-        let modifiedAny = false;
-        for (const key of Object.keys(unzipped)) {
-          if (/^Contents\/section\d+\.xml$/i.test(key)) {
-            const xml = strFromU8(unzipped[key]);
-            if (xml.includes("[[PII_")) {
-              const restored = sessionMasker.unmaskText(xml);
-              if (restored !== xml) {
-                unzipped[key] = strToU8(restored);
-                modifiedAny = true;
-              }
-            }
-          }
-        }
-        if (modifiedAny) {
-          finalBytes = zipSync(unzipped, { level: 6 });
+        const { restoredBytes, restoredNodeCount } = unmaskHwpxPackageBytes(
+          stagingDiffBytes,
+          sessionMasker
+        );
+        if (restoredNodeCount > 0) {
+          finalBytes = restoredBytes;
           if (stagingPath) {
             await invoke("write_file_bytes", {
               filePath: stagingPath,
@@ -1070,7 +1262,7 @@ export const useDocStore = create<DocState>((set, get) => ({
 
   acceptDiffItem: async (diffId) => {
     await get().syncHopToStaging();
-    const { stagingPath, isHwpx, pendingDiffs, tablesMeta, fileBytes, undoHistoryBytes, fileName } = get();
+    const { stagingPath, isHwpx, pendingDiffs, tablesMeta, fileBytes, undoHistoryBytes, fileName, excludedRegions } = get();
     const target = pendingDiffs.find((d) => d.id === diffId);
     if (!target || !stagingPath) return;
 
@@ -1083,9 +1275,18 @@ export const useDocStore = create<DocState>((set, get) => ({
       false
     );
 
+    let finalPayloadJson = payload.stdinJson;
+    if (payload.isHwpx && excludedRegions.length > 0) {
+      try {
+        const parsed = JSON.parse(payload.stdinJson);
+        parsed.policyContext = { isNewDocument: false, excludedRegions };
+        finalPayloadJson = JSON.stringify(parsed);
+      } catch {}
+    }
+
     const res = await invoke<{ ok: boolean; stdout_json: any; stderr: string }>("execute_claw_ops", {
       isHwpx: payload.isHwpx,
-      payloadJson: payload.stdinJson,
+      payloadJson: finalPayloadJson,
     });
 
     if (!res.ok) {
@@ -1119,16 +1320,25 @@ export const useDocStore = create<DocState>((set, get) => ({
 
   acceptAllDiffs: async () => {
     await get().syncHopToStaging();
-    const { stagingPath, isHwpx, pendingDiffs, tablesMeta, fileBytes, undoHistoryBytes, fileName } = get();
+    const { stagingPath, isHwpx, pendingDiffs, tablesMeta, fileBytes, undoHistoryBytes, fileName, excludedRegions } = get();
     if (!stagingPath || pendingDiffs.length === 0) return;
 
     const isHwpxDoc = Boolean(isHwpx ?? /\.hwpx$/i.test(stagingPath));
     const batchedOps = pendingDiffs.flatMap((d) => d.unifiedOps);
     const payload = OpTranslator.toEnginePayload(stagingPath, isHwpxDoc, batchedOps, tablesMeta, false);
 
+    let finalPayloadJson = payload.stdinJson;
+    if (payload.isHwpx && excludedRegions.length > 0) {
+      try {
+        const parsed = JSON.parse(payload.stdinJson);
+        parsed.policyContext = { isNewDocument: false, excludedRegions };
+        finalPayloadJson = JSON.stringify(parsed);
+      } catch {}
+    }
+
     const res = await invoke<{ ok: boolean; stdout_json: any; stderr: string }>("execute_claw_ops", {
       isHwpx: payload.isHwpx,
-      payloadJson: payload.stdinJson,
+      payloadJson: finalPayloadJson,
     });
 
     if (!res.ok) {

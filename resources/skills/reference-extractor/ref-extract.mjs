@@ -18,41 +18,26 @@ const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 const CLAW_SCRIPTS_DIR = path.resolve(WORKSPACE_ROOT, "resources/claw-hwp/scripts");
 const FFLATE_PATH = path.resolve(CLAW_SCRIPTS_DIR, "vendor/fflate/index.mjs");
 
-export const MAX_ZIP_COMPRESSED_BYTES = 25 * 1024 * 1024;
-export const MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 100 * 1024 * 1024;
-export const MAX_ZIP_SINGLE_ENTRY_BYTES = 35 * 1024 * 1024;
-export const MAX_ZIP_ENTRIES = 2500;
-export const MAX_ZIP_COMPRESSION_RATIO = 120;
+import {
+  MAX_ZIP_COMPRESSED_BYTES,
+  MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES,
+  MAX_ZIP_SINGLE_ENTRY_BYTES,
+  MAX_ZIP_ENTRIES,
+  MAX_ZIP_COMPRESSION_RATIO,
+  safeUnzipHwpxBytes,
+} from "../../claw-hwp/scripts/security-guard.mjs";
+
+export {
+  MAX_ZIP_COMPRESSED_BYTES,
+  MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES,
+  MAX_ZIP_SINGLE_ENTRY_BYTES,
+  MAX_ZIP_ENTRIES,
+  MAX_ZIP_COMPRESSION_RATIO,
+};
 
 export async function safeUnzipBytes(zipBytes, label = "archive") {
-  if (zipBytes.byteLength > MAX_ZIP_COMPRESSED_BYTES) {
-    throw new Error(`[Security] ${label} 압축 크기 초과 (${zipBytes.byteLength} bytes)`);
-  }
   const fflate = await import(pathToFileURL(FFLATE_PATH).href);
-  let entryCount = 0;
-  let totalUncompressed = 0;
-
-  const unzipped = fflate.unzipSync(new Uint8Array(zipBytes), {
-    filter(file) {
-      entryCount++;
-      if (entryCount > MAX_ZIP_ENTRIES) {
-        throw new Error(`[Security] ${label} 압축 엔트리 개수 한도 초과 (${MAX_ZIP_ENTRIES})`);
-      }
-      const origSize = file.originalSize || 0;
-      const compSize = Math.max(1, file.size || 1);
-      if (origSize > MAX_ZIP_SINGLE_ENTRY_BYTES) {
-        throw new Error(`[Security] ${label} 단일 엔트리 크기 한도 초과: ${file.name}`);
-      }
-      if (origSize / compSize > MAX_ZIP_COMPRESSION_RATIO && origSize > 1024 * 1024) {
-        throw new Error(`[Security] ${label} 비정상 압축률 감지(Zip-Bomb 의심): ${file.name}`);
-      }
-      totalUncompressed += origSize;
-      if (totalUncompressed > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES) {
-        throw new Error(`[Security] ${label} 총 해제 용량 한도 초과 (100MB)`);
-      }
-      return true;
-    },
-  });
+  const unzipped = safeUnzipHwpxBytes(new Uint8Array(zipBytes), label);
   return { unzipped, fflate };
 }
 
@@ -267,6 +252,12 @@ async function main() {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--json") {
       asJson = true;
+    } else if (args[i] === "--format" && args[i + 1]) {
+      const fmt = String(args[++i]).toLowerCase();
+      asJson = fmt === "json";
+    } else if (args[i].startsWith("--format=")) {
+      const fmt = args[i].slice("--format=".length).toLowerCase();
+      asJson = fmt === "json";
     } else if (args[i] === "--output" && args[i + 1]) {
       outputFile = path.resolve(args[++i]);
     } else if (!args[i].startsWith("--")) {

@@ -193,8 +193,8 @@ export const App: React.FC = () => {
           <span>작성 메모리: {activeMemoryIds.length}개 활성</span>
           <span>·</span>
           <span>
-            PII 마스킹: {autoMaskPii ? "ON" : "OFF"}
-            {excludedRegions.length > 0 ? ` (제외 ${excludedRegions.length})` : ""}
+            PII 보호: {autoMaskPii ? "ON (마스킹 사본 전달)" : "OFF (원본 전달)"}
+            {excludedRegions.length > 0 ? ` · 제외 ${excludedRegions.length}` : ""}
           </span>
           <span>·</span>
           <span>GPL-3.0-or-later</span>

@@ -90,14 +90,18 @@ export const PiiPrivacyModal: React.FC = () => {
               <div className="space-y-1">
                 <div className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
                   <Lock className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>정규식 기반 PII 자동 토큰 마스킹</span>
+                  <span>개인정보(PII) 자동 가리기 — 문서·메모리 마스킹 사본 전달</span>
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                  주민등록번호, 휴대전화번호, 이메일, 계좌번호, 카드번호를 감지하여{" "}
+                  켜두면 AI 에이전트 CLI 실행 시 명령어뿐만 아니라{" "}
+                  <strong className="text-slate-700 dark:text-slate-200">
+                    문서(HWPX)와 작성 메모리의 마스킹된 임시 사본
+                  </strong>
+                  을 전달해 주민등록번호·연락처·이메일·계좌번호를{" "}
                   <code className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-emerald-700 dark:text-emerald-300 font-mono">
                     [[PII_PHONE_1]]
                   </code>{" "}
-                  형태의 세션 토큰으로 치환합니다.
+                  토큰으로 가리고, 편집이 끝나면 원래 정보로 자동 복원합니다. 꺼두면 원본 스테이징 문서가 그대로 전달됩니다.
                 </p>
               </div>
               <button
@@ -118,6 +122,14 @@ export const PiiPrivacyModal: React.FC = () => {
               <div className="text-slate-400">원문 예시: {maskPreviewSample}</div>
               <div className="text-emerald-600 dark:text-emerald-400">
                 치환 결과: {maskedSampleResult}
+              </div>
+              <div className="text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-100 dark:border-slate-800 font-sans">
+                현재 CLI 전달 상태:{" "}
+                <strong className={autoMaskPii ? "text-emerald-600 dark:text-emerald-400" : "text-slate-700 dark:text-slate-300"}>
+                  {autoMaskPii
+                    ? "마스킹된 임시 문서·메모리 사본 전달 중 (원본 개인정보 보호)"
+                    : "원본 스테이징 문서 직접 전달 중 (마스킹 꺼짐)"}
+                </strong>
               </div>
             </div>
           </div>

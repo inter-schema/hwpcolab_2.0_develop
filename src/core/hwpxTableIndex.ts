@@ -1,4 +1,5 @@
-import { unzipSync, strFromU8 } from "fflate";
+import { strFromU8 } from "fflate";
+import { safeUnzipBytes } from "./safeUnzip.ts";
 import type { TableCoordinateMeta, CellBBox } from "../types/hwp.ts";
 
 export interface ScannedElement {
@@ -214,7 +215,7 @@ export function parseHwpxSectionTables(
  * Extracts and parses all tables across all section XML files from HWPX package bytes.
  */
 export function parseHwpxTablesFromBytes(fileBytes: Uint8Array): HwpxParsedTable[] {
-  const unzipped = unzipSync(fileBytes);
+  const unzipped = safeUnzipBytes(fileBytes, "hwpx-table-index");
   const sectionFiles = Object.keys(unzipped)
     .filter((n) => /^Contents\/section\d+\.xml$/i.test(n))
     .sort((a, b) => {

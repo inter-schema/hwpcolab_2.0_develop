@@ -220,10 +220,18 @@ pub async fn check_staging_status(file_path: String) -> Result<StagingStatusResu
 }
 
 #[tauri::command]
-pub async fn sync_writing_memory_file(content: String) -> Result<String, String> {
+pub async fn sync_writing_memory_file(
+    content: String,
+    masked: Option<bool>,
+) -> Result<String, String> {
     let dir = std::env::temp_dir().join("hop-claw-staging");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let file_path = dir.join("active_writing_memory.md");
+    let file_name = if masked.unwrap_or(false) {
+        "active_writing_memory.masked.md"
+    } else {
+        "active_writing_memory.md"
+    };
+    let file_path = dir.join(file_name);
     std::fs::write(&file_path, content.as_bytes()).map_err(|e| e.to_string())?;
     Ok(file_path.to_string_lossy().to_string())
 }
@@ -266,6 +274,108 @@ pub async fn execute_agent_cli_command(
     };
 
     cmd.current_dir(&root)
+        .env("PATH", new_path)
+        .env("HWP_STAGING_PATH", &staging_str)
+        .env("HWP_WRITING_MEMORY_PATH", writing_memory_path.unwrap_or_default())
+        .env("HWP_SELECTION_JSON", selection_json.unwrap_or_default())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = cmd.output().await.map_err(|e| e.to_string())?;
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let after_mtime = if !staging_str.is_empty() && staging_buf.exists() {
+        file_mtime_ms(&staging_buf)
+    } else {
+        0
+    };
+
+    Ok(AgentCliExecResult {
+        ok: output.status.success(),
+        exit_code: output.status.code().unwrap_or(1),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        duration_ms,
+        staging_modified: before_mtime > 0 && after_mtime > before_mtime,
+        staging_mtime_ms: after_mtime,
+    })
+}
+
+fn resolve_skill_script(app: &AppHandle, skill: &str) -> Result<PathBuf, String> {
+    let rel_parts: &[&str] = match skill {
+        "ref-extract" => &["resources", "skills", "reference-extractor", "ref-extract.mjs"],
+        "hwp-cli" => &["resources", "skills", "hwp-document-editor", "hwp-cli.mjs"],
+        _ => return Err(format!("허용되지 않은 내장 스킬입니다: {}", skill)),
+    };
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let mut up_candidate = resource_dir.join("_up_");
+        for part in rel_parts {
+            up_candidate = up_candidate.join(part);
+        }
+        if up_candidate.exists() {
+            return Ok(strip_unc_prefix(up_candidate));
+        }
+
+        let mut direct_candidate = resource_dir;
+        for part in rel_parts {
+            direct_candidate = direct_candidate.join(part);
+        }
+        if direct_candidate.exists() {
+            return Ok(strip_unc_prefix(direct_candidate));
+        }
+    }
+
+    let current = std::env::current_dir().map_err(|e| e.to_string())?;
+    let root = if current.ends_with("src-tauri") {
+        current.parent().unwrap_or(&current).to_path_buf()
+    } else {
+        current
+    };
+    let mut dev_path = root;
+    for part in rel_parts {
+        dev_path = dev_path.join(part);
+    }
+    if dev_path.exists() {
+        return Ok(strip_unc_prefix(dev_path));
+    }
+    Err(format!("Skill script not found: {} ({:?})", skill, dev_path))
+}
+
+/// 구조화된 인자 배열로 내장 스킬(ref-extract / hwp-cli) 직접 실행 (셸 미경유, 파일명 주입 원천 차단)
+#[tauri::command]
+pub async fn execute_skill_command(
+    app: AppHandle,
+    skill: String,
+    args: Vec<String>,
+    staging_path: Option<String>,
+    writing_memory_path: Option<String>,
+    selection_json: Option<String>,
+) -> Result<AgentCliExecResult, String> {
+    let start = Instant::now();
+    let script_path = resolve_skill_script(&app, &skill)?;
+    let staging_str = staging_path.unwrap_or_default();
+    let staging_buf = PathBuf::from(&staging_str);
+    let before_mtime = if !staging_str.is_empty() && staging_buf.exists() {
+        file_mtime_ms(&staging_buf)
+    } else {
+        0
+    };
+
+    let current = std::env::current_dir().map_err(|e| e.to_string())?;
+    let root = if current.ends_with("src-tauri") {
+        current.parent().unwrap_or(&current).to_path_buf()
+    } else {
+        current
+    };
+    let skills_bin = root.join("resources").join("skills").join("bin");
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+    let new_path = format!("{}{}{}", skills_bin.to_string_lossy(), sep, old_path);
+
+    let mut cmd = new_node_command();
+    cmd.arg(&script_path)
+        .args(&args)
+        .current_dir(&root)
         .env("PATH", new_path)
         .env("HWP_STAGING_PATH", &staging_str)
         .env("HWP_WRITING_MEMORY_PATH", writing_memory_path.unwrap_or_default())

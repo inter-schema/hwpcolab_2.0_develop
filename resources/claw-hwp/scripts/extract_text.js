@@ -11,7 +11,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
-import { unzipSync, strFromU8 } from './vendor/fflate/index.mjs';
+import { strFromU8 } from './vendor/fflate/index.mjs';
+import { safeUnzipHwpxBytes } from './security-guard.mjs';
 import { dumpTables } from './cell-inspect.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -111,7 +112,7 @@ if (isHwpxZip) {
   hwpxBytes = await convertHwpToHwpx(inputBytes);
 }
 
-const files = unzipSync(hwpxBytes);
+const files = safeUnzipHwpxBytes(hwpxBytes, path.basename(opts.input));
 const sectionXmls = Object.entries(files)
   .filter(([n]) => /^Contents\/section\d+\.xml$/.test(n))
   .sort(([a], [b]) => sectionIndex(a) - sectionIndex(b))

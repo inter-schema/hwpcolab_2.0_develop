@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { isAllowedDevApiRequest, resolveSafeStaticFile } from './src/services/devApiSecurity';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -162,6 +163,84 @@ function runAgentShellCommand(params: {
   });
 }
 
+const ALLOWED_SKILL_SCRIPTS: Record<string, string> = {
+  'ref-extract': 'resources/skills/reference-extractor/ref-extract.mjs',
+  'hwp-cli': 'resources/skills/hwp-document-editor/hwp-cli.mjs',
+};
+
+function runStructuredSkillCommand(params: {
+  skill: string;
+  args: string[];
+  stagingPath?: string;
+  writingMemoryPath?: string;
+  selectionJson?: string;
+}): Promise<{
+  ok: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  stagingModified: boolean;
+  stagingMtimeMs: number;
+}> {
+  const startMs = Date.now();
+  const relScript = ALLOWED_SKILL_SCRIPTS[params.skill];
+  if (!relScript) {
+    return Promise.resolve({
+      ok: false,
+      exitCode: 1,
+      stdout: '',
+      stderr: `허용되지 않은 내장 스킬입니다: ${params.skill}`,
+      durationMs: 0,
+      stagingModified: false,
+      stagingMtimeMs: 0,
+    });
+  }
+
+  const scriptPath = path.resolve(__dirname, relScript);
+  const stagingPath = params.stagingPath ? String(params.stagingPath) : '';
+  const beforeMtime =
+    stagingPath && fs.existsSync(stagingPath) ? Math.floor(fs.statSync(stagingPath).mtimeMs) : 0;
+
+  const skillBinDir = path.resolve(__dirname, 'resources/skills/bin');
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: `${skillBinDir}${path.delimiter}${process.env.PATH || ''}`,
+  };
+  if (stagingPath) env.HWP_STAGING_PATH = stagingPath;
+  if (params.writingMemoryPath) env.HWP_WRITING_MEMORY_PATH = String(params.writingMemoryPath);
+  if (params.selectionJson) env.HWP_SELECTION_JSON = String(params.selectionJson);
+
+  const safeArgs = Array.isArray(params.args) ? params.args.map((a) => String(a)) : [];
+
+  return new Promise((resolve) => {
+    execFile(
+      'node',
+      [scriptPath, ...safeArgs],
+      {
+        cwd: __dirname,
+        env,
+        maxBuffer: 25 * 1024 * 1024,
+      },
+      (err, stdout, stderr) => {
+        const afterMtime =
+          stagingPath && fs.existsSync(stagingPath) ? Math.floor(fs.statSync(stagingPath).mtimeMs) : 0;
+        const exitCode =
+          err && typeof (err as any).code === 'number' ? (err as any).code : err ? 1 : 0;
+        resolve({
+          ok: !err,
+          exitCode,
+          stdout: String(stdout ?? ''),
+          stderr: String(stderr ?? (err ? err.message : '')),
+          durationMs: Date.now() - startMs,
+          stagingModified: afterMtime > beforeMtime && beforeMtime > 0,
+          stagingMtimeMs: afterMtime,
+        });
+      }
+    );
+  });
+}
+
 function hopClawBridgePlugin(): Plugin {
   const VIRTUAL_HWPCTRL_ID = '\0virtual:rhwp-hwpctrl-stub';
   return {
@@ -183,27 +262,69 @@ function hopClawBridgePlugin(): Plugin {
         const url = req.url || '';
 
         if (url.startsWith('/fonts/')) {
-          const rel = decodeURIComponent(url.replace(/^\/fonts\//, '').split('?')[0]);
-          const fontFile = path.resolve(__dirname, 'assets/fonts', rel);
-          if (fs.existsSync(fontFile) && fs.statSync(fontFile).isFile()) {
-            res.setHeader('Content-Type', fontFile.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream');
-            fs.createReadStream(fontFile).pipe(res);
+          const resolved = resolveSafeStaticFile(
+            path.resolve(__dirname, 'assets/fonts'),
+            url.replace(/^\/fonts\//, '')
+          );
+          if (resolved.ok) {
+            res.setHeader(
+              'Content-Type',
+              resolved.filePath.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream'
+            );
+            fs.createReadStream(resolved.filePath).pipe(res);
+            return;
+          }
+          if (resolved.status === 400 || resolved.status === 403) {
+            res.statusCode = resolved.status;
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.end(JSON.stringify({ ok: false, error: 'Forbidden static path' }));
             return;
           }
         }
 
         if (url.startsWith('/samples/')) {
-          const rel = decodeURIComponent(url.replace(/^\/samples\//, '').split('?')[0]);
-          const sampleFile = path.resolve(__dirname, 'samples', rel);
-          if (fs.existsSync(sampleFile) && fs.statSync(sampleFile).isFile()) {
+          const resolved = resolveSafeStaticFile(
+            path.resolve(__dirname, 'samples'),
+            url.replace(/^\/samples\//, '')
+          );
+          if (resolved.ok) {
             res.setHeader('Content-Type', 'application/octet-stream');
-            fs.createReadStream(sampleFile).pipe(res);
+            fs.createReadStream(resolved.filePath).pipe(res);
+            return;
+          }
+          if (resolved.status === 400 || resolved.status === 403) {
+            res.statusCode = resolved.status;
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.end(JSON.stringify({ ok: false, error: 'Forbidden static path' }));
             return;
           }
         }
 
         if (!url.startsWith('/__hop_claw_api/')) {
           next();
+          return;
+        }
+
+        // Enforce Host / Origin boundary on all /__hop_claw_api/* endpoints
+        const authDecision = isAllowedDevApiRequest(
+          {
+            host: typeof req.headers.host === 'string' ? req.headers.host : undefined,
+            origin: typeof req.headers.origin === 'string' ? req.headers.origin : undefined,
+            referer: typeof req.headers.referer === 'string' ? req.headers.referer : undefined,
+            'sec-fetch-site':
+              typeof req.headers['sec-fetch-site'] === 'string'
+                ? req.headers['sec-fetch-site']
+                : undefined,
+          },
+          {
+            allowRemoteDev: process.env.HOP_ALLOW_REMOTE_DEV === '1',
+            extraAllowedHosts: process.env.APP_URL ? [process.env.APP_URL] : [],
+          }
+        );
+        if (!authDecision.allowed) {
+          res.statusCode = 403;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.end(JSON.stringify({ ok: false, error: 'Forbidden request origin or host' }));
           return;
         }
 
@@ -335,7 +456,11 @@ function hopClawBridgePlugin(): Plugin {
 
               case 'sync_writing_memory_file': {
                 const content = String(args.content ?? '');
-                const memPath = path.join(stagingDir, 'active_writing_memory.md');
+                const isMasked = Boolean(args.masked);
+                const memPath = path.join(
+                  stagingDir,
+                  isMasked ? 'active_writing_memory.masked.md' : 'active_writing_memory.md'
+                );
                 fs.writeFileSync(memPath, content, 'utf-8');
                 sendJson(200, { ok: true, result: memPath });
                 return;
@@ -405,6 +530,20 @@ function hopClawBridgePlugin(): Plugin {
                 return;
               }
 
+              case 'execute_skill_command': {
+                const skill = String(args.skill || '');
+                const skillArgs = Array.isArray(args.args) ? args.args.map((a: unknown) => String(a)) : [];
+                const execRes = await runStructuredSkillCommand({
+                  skill,
+                  args: skillArgs,
+                  stagingPath: args.stagingPath,
+                  writingMemoryPath: args.writingMemoryPath,
+                  selectionJson: args.selectionJson,
+                });
+                sendJson(200, { ok: true, result: execRes });
+                return;
+              }
+
               case 'list_local_fonts':
               case 'read_local_font': {
                 sendJson(200, { ok: true, result: [] });
@@ -440,6 +579,10 @@ export default defineConfig({
   },
   server: {
     port: 3000,
-    host: '0.0.0.0',
+    host:
+      process.env.HOP_DEV_HOST ||
+      (process.env.APP_URL || process.env.K_SERVICE || process.env.PORT
+        ? '0.0.0.0'
+        : '127.0.0.1'),
   },
 });

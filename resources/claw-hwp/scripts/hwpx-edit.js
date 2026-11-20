@@ -87,7 +87,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import url from 'node:url';
-import { unzipSync, zipSync, strFromU8, strToU8 } from './vendor/fflate/index.mjs';
+import { zipSync, strFromU8, strToU8 } from './vendor/fflate/index.mjs';
+import {
+  safeUnzipHwpxBytes,
+  extractTablesMetaFromUnzipped,
+  validateHwpxOperations,
+} from './security-guard.mjs';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
@@ -5140,13 +5145,38 @@ async function main() {
     ? payload.output
     : inputPath.replace(/\.hwpx$/i, '_edited.hwpx');
 
-  const doc = new Hwpx(unzipSync(bytes));
+  let unzippedFiles;
+  try {
+    unzippedFiles = safeUnzipHwpxBytes(bytes, path.basename(inputPath));
+  } catch (e) {
+    fail(e && e.message ? e.message : String(e), { stage: 'zip-security' });
+  }
+  const doc = new Hwpx(unzippedFiles);
   // Read-only inspect: dump the cell inventory and exit without touching/saving the file.
   if (payload.inspect === 'cells') {
     process.stdout.write(JSON.stringify({ ok: true, tables: dumpCells(doc) }, null, 2) + '\n');
     return;
   }
   const ops = Array.isArray(payload.operations) ? payload.operations : [];
+  // Engine-level Policy Guard (cannot be bypassed by CLI wrappers or direct calls)
+  const tablesMeta = extractTablesMetaFromUnzipped(unzippedFiles);
+  const policyContext = {
+    isNewDocument: Boolean(payload.policyContext?.isNewDocument ?? payload.isNewDocument ?? false),
+    isHwpx: true,
+    excludedRegions: Array.isArray(payload.policyContext?.excludedRegions)
+      ? payload.policyContext.excludedRegions
+      : Array.isArray(payload.excludedRegions)
+        ? payload.excludedRegions
+        : [],
+  };
+  const policyCheck = validateHwpxOperations(ops, tablesMeta, policyContext);
+  if (!policyCheck.valid) {
+    fail(`Policy Guard 위반: ${policyCheck.errors.join(' | ')}`, {
+      stage: 'policy-guard',
+      errors: policyCheck.errors,
+      warnings: policyCheck.warnings,
+    });
+  }
   const results = [];
   for (let i = 0; i < ops.length; i++) {
     try {
