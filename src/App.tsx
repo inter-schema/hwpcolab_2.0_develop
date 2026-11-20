@@ -24,8 +24,16 @@ export const App: React.FC = () => {
     autoMaskPii,
     excludedRegions,
     stagingDiffSession,
+    uiPalette,
+    setUiPalette,
   } = useDocStore();
   const [isWindowDragging, setIsWindowDragging] = useState(false);
+
+  // 초기 배색 팔레트와 rhwp-studio 라이트/다크 모드 동기화
+  useEffect(() => {
+    setUiPalette(uiPalette);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 앱 시작 시: OS 파일 연결 인자 조회 또는 빈 HWPX 문서로 초기화 + 작성 메모리 인덱스 로드
   useEffect(() => {
@@ -137,15 +145,15 @@ export const App: React.FC = () => {
   }, [openDocument, openDocumentBytes, addAttachment]);
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#F8FAFC] dark:bg-[#0D1117] text-[#0F172A] dark:text-[#F0F6FC] overflow-hidden relative">
+    <div className="h-screen w-screen flex flex-col bg-[var(--hc-bg)] text-[var(--hc-text)] overflow-hidden relative transition-colors duration-200">
       {/* 전체 창 드래그 앤 드롭 안내 오버레이 */}
       {isWindowDragging && (
-        <div className="fixed inset-0 z-50 bg-teal-600/20 backdrop-blur-xs border-4 border-dashed border-teal-500 flex items-center justify-center pointer-events-none">
-          <div className="bg-white dark:bg-[#161B22] px-8 py-6 rounded-xl shadow-2xl border border-teal-100 dark:border-teal-800 text-center">
-            <p className="text-lg font-bold text-slate-800 dark:text-slate-100">
+        <div className="fixed inset-0 z-50 bg-black/25 backdrop-blur-xs border-4 border-dashed border-[var(--hc-accent)] flex items-center justify-center pointer-events-none">
+          <div className="bg-[var(--hc-card)] px-8 py-6 rounded-xl shadow-2xl border border-[var(--hc-border)] text-center">
+            <p className="text-lg font-bold text-[var(--hc-text)]">
               여기에 파일을 놓아 열기
             </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            <p className="text-xs text-[var(--hc-muted)] mt-1">
               HWP / HWPX 문서는 캔버스에서 즉시 열리고, 엑셀·워드·PDF·이미지는 참고 첨부 자료로 등록됩니다.
             </p>
           </div>
@@ -155,13 +163,13 @@ export const App: React.FC = () => {
       {/* 상단 통합 헤더 툴바 */}
       <HeaderToolbar />
 
-      {/* 메인 워크스페이스: rhwp-studio 캔버스 + 도킹형 에이전트 CLI 패널 (우측 또는 하단) */}
+      {/* 메인 워크스페이스: rhwp-studio 캔버스(원본 격리) + 도킹형 미니멀 에이전트 CLI 패널 */}
       <div
         className={`flex-1 flex overflow-hidden relative ${
           cliPanelOpen && cliPanelDock === "bottom" ? "flex-col" : "flex-row"
         }`}
       >
-        {/* 중앙: 최신 rhwp-studio 직접 호스팅 캔버스 + 시각적 Diff 리뷰 배너 */}
+        {/* 중앙: 최신 rhwp-studio 직접 호스팅 캔버스 + 시각적 Diff 리뷰 배너 (배색 스타일 미간섭) */}
         <div className="flex-1 h-full min-w-0 min-h-0 overflow-hidden relative">
           <HopEditorHost />
           <RhwpDiffReviewOverlay />
@@ -174,29 +182,31 @@ export const App: React.FC = () => {
       {/* 최하단 IDE 상태바 (24px) */}
       <footer
         id="hop-ide-status-bar"
-        className="h-6 px-3 bg-[#F1F5F9] dark:bg-[#161B22] border-t border-[#E2E8F0] dark:border-[#21262D] flex items-center justify-between text-[11px] text-[#475569] dark:text-[#8B949E] font-mono tabular-nums select-none shrink-0"
+        className="hc-chrome h-6 px-3 bg-[var(--hc-surface)] border-t border-[var(--hc-border)] flex items-center justify-between text-[11px] text-[var(--hc-muted)] font-mono tabular-nums select-none shrink-0 transition-colors duration-200"
       >
         <div className="flex items-center gap-2 truncate">
-          <span className="font-semibold text-[#0F172A] dark:text-[#F0F6FC]">
+          <span className="font-semibold text-[var(--hc-text)]">
             {isHwpx ? "OWPML/HWPX" : "Binary/HWP"}
           </span>
-          <span>·</span>
+          <span aria-hidden="true">·</span>
           <span className="truncate max-w-[320px]" title={stagingPath || ""}>
             Staging: {stagingPath ? stagingPath.split("/").slice(-2).join("/") : "대기 중"}
           </span>
-          <span>·</span>
+          <span aria-hidden="true">·</span>
           <span>
             Diff: {stagingDiffSession ? `${stagingDiffSession.diffItems.length}건 대기` : "동기화됨"}
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span>작성 메모리: {activeMemoryIds.length}개 활성</span>
-          <span>·</span>
+          <span aria-hidden="true">·</span>
           <span>
             PII 보호: {autoMaskPii ? "ON (마스킹 사본 전달)" : "OFF (원본 전달)"}
             {excludedRegions.length > 0 ? ` · 제외 ${excludedRegions.length}` : ""}
           </span>
-          <span>·</span>
+          <span aria-hidden="true">·</span>
+          <span>{uiPalette === "rose" ? "로즈 블라썸" : "앰버 에스프레소"}</span>
+          <span aria-hidden="true">·</span>
           <span>GPL-3.0-or-later</span>
         </div>
       </footer>

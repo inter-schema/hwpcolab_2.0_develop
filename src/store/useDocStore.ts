@@ -20,6 +20,7 @@ export { type DiffItem };
 export type ProviderId = string;
 export type AgentLoopMode = "legacy" | "v2";
 export type CliPresetId = "claude" | "gemini" | "codex" | "hwp-shell" | string;
+export type UiPalette = "rose" | "espresso";
 
 export interface CustomCliPreset {
   id: string;
@@ -101,6 +102,7 @@ interface DocState {
   writingMemoryFilePath: string | null;
   selectionContextPath: string | null;
   toastMessage: string | null;
+  uiPalette: UiPalette;
 
   // Legacy aliases kept for backwards test compatibility
   sidebarOpen: boolean;
@@ -149,6 +151,8 @@ interface DocState {
   syncWritingMemoryFileToDisk: (maskedOverride?: boolean) => Promise<string | null>;
   syncWritingMemoryEnvFile: () => Promise<string | null>;
   showToastMessage: (msg: string | null) => void;
+  setUiPalette: (palette: UiPalette) => void;
+  toggleUiPalette: () => void;
   checkExternalStagingModification: (forceCompare?: boolean) => Promise<boolean>;
   acceptStagingDiff: () => Promise<void>;
   rejectStagingDiff: () => Promise<void>;
@@ -289,6 +293,17 @@ export const useDocStore = create<DocState>((set, get) => ({
   writingMemoryFilePath: null,
   selectionContextPath: null,
   toastMessage: null,
+  uiPalette: (() => {
+    if (typeof localStorage !== "undefined") {
+      const saved = localStorage.getItem("hop-claw-palette");
+      if (saved === "rose" || saved === "espresso") return saved;
+    }
+    if (typeof document !== "undefined") {
+      const attr = document.documentElement.dataset.hcPalette;
+      if (attr === "rose" || attr === "espresso") return attr;
+    }
+    return "rose";
+  })(),
 
   sidebarOpen: true,
   sidebarDock: "right",
@@ -315,6 +330,22 @@ export const useDocStore = create<DocState>((set, get) => ({
   setCliPanelOpen: (cliPanelOpen) => set({ cliPanelOpen, sidebarOpen: cliPanelOpen }),
   toggleCliPanel: () =>
     set((s) => ({ cliPanelOpen: !s.cliPanelOpen, sidebarOpen: !s.cliPanelOpen })),
+  setUiPalette: (palette: UiPalette) => {
+    if (typeof localStorage !== "undefined") {
+      try {
+        localStorage.setItem("hop-claw-palette", palette);
+      } catch {}
+    }
+    if (typeof document !== "undefined") {
+      document.documentElement.dataset.hcPalette = palette;
+    }
+    hopBridge.setHopThemeMode(palette === "espresso" ? "dark" : "light");
+    set({ uiPalette: palette });
+  },
+  toggleUiPalette: () => {
+    const next: UiPalette = get().uiPalette === "rose" ? "espresso" : "rose";
+    get().setUiPalette(next);
+  },
   setCliPanelDock: (cliPanelDock) => {
     if (typeof localStorage !== "undefined") {
       localStorage.setItem("hop_cli_dock", cliPanelDock);

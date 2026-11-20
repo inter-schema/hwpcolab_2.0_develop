@@ -4,8 +4,60 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
+:root,
+:root[data-hc-palette="rose"] {
   font-family: "Pretendard Variable", "Pretendard", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Malgun Gothic", "맑은 고딕", "Apple SD 산돌고딕 Neo", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --hc-bg: #FBF0F4;
+  --hc-surface: #F6E2EA;
+  --hc-surface-alt: #FCECF2;
+  --hc-card: #FFFDFD;
+  --hc-tab-active: #F1C6D5;
+  --hc-border: #DAB2C1;
+  --hc-border-subtle: #EBD0DA;
+  --hc-accent: #A8466D;
+  --hc-accent-hover: #923A5D;
+  --hc-accent-fg: #FFFFFF;
+  --hc-accent-soft: #F3D1DF;
+  --hc-text: #4A2031;
+  --hc-muted: #734759;
+  --hc-code: #8B2F54;
+  --hc-sparkle: #DF9AB5;
+  --hc-sparkle-strong: #B5547A;
+  --hc-success: #166534;
+  --hc-success-soft: rgba(22, 101, 52, 0.1);
+  --hc-warn: #9A3412;
+  --hc-danger: #9F1239;
+  --hc-danger-soft: rgba(159, 18, 57, 0.08);
+  --hc-scroll-thumb: #D7A8BA;
+  --hc-scroll-thumb-hover: #B5547A;
+  --hc-cmd-border-style: dashed;
+}
+
+:root[data-hc-palette="espresso"] {
+  --hc-bg: #1C1611;
+  --hc-surface: #231B14;
+  --hc-surface-alt: #18120D;
+  --hc-card: #18120D;
+  --hc-tab-active: #2B2118;
+  --hc-border: #5E4B3A;
+  --hc-border-subtle: #3D3024;
+  --hc-accent: #D97736;
+  --hc-accent-hover: #E58747;
+  --hc-accent-fg: #1C1611;
+  --hc-accent-soft: rgba(217, 119, 54, 0.16);
+  --hc-text: #EFE5D8;
+  --hc-muted: #AE9C86;
+  --hc-code: #E8A255;
+  --hc-sparkle: #6E5B48;
+  --hc-sparkle-strong: #D97736;
+  --hc-success: #6EE7B7;
+  --hc-success-soft: rgba(110, 231, 183, 0.12);
+  --hc-warn: #FBBF24;
+  --hc-danger: #FDA4AF;
+  --hc-danger-soft: rgba(253, 164, 175, 0.12);
+  --hc-scroll-thumb: #4D3D2F;
+  --hc-scroll-thumb-hover: #7A624C;
+  --hc-cmd-border-style: solid;
 }
 
 body {
@@ -48,4 +100,18 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
+}
+
+/* Palette-synced minimal scrollbar for HOP-Claw workspace chrome & sidebar */
+.hc-chrome ::-webkit-scrollbar-thumb {
+  background: var(--hc-scroll-thumb);
+  border-radius: 9999px;
+}
+
+.hc-chrome ::-webkit-scrollbar-thumb:hover {
+  background: var(--hc-scroll-thumb-hover);
+}
+
+.hc-cmd-box {
+  border-style: var(--hc-cmd-border-style);
 }

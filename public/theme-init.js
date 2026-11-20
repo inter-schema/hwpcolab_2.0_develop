@@ -1,23 +1,33 @@
 (() => {
   const root = document.documentElement;
-  const isThemeMode = (value) => value === 'system' || value === 'light' || value === 'dark';
-  let mode = 'light';
   let skin = 'default';
+  const isPalette = (value) => value === 'rose' || value === 'espresso';
+  let palette = 'rose';
   try {
+    const savedPalette = localStorage.getItem('hop-claw-palette');
+    if (isPalette(savedPalette)) {
+      palette = savedPalette;
+    } else {
+      const settings = JSON.parse(localStorage.getItem('rhwp-settings') || '{}');
+      const storedMode = settings && settings.theme && settings.theme.mode;
+      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const fallbackDark = storedMode === 'dark' || (storedMode === 'system' && prefersDark);
+      palette = fallbackDark ? 'espresso' : 'rose';
+    }
     const settings = JSON.parse(localStorage.getItem('rhwp-settings') || '{}');
-    const storedMode = settings && settings.theme && settings.theme.mode;
-    if (isThemeMode(storedMode)) mode = storedMode;
     const storedSkin = settings && settings.theme && settings.theme.skin;
     if (storedSkin === 'flat' || storedSkin === 'oldschool') skin = storedSkin;
   } catch {
-    mode = 'light';
+    palette = 'rose';
   }
   if (skin !== 'default') root.dataset.themeSkin = skin;
-  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const effective = mode === 'dark' || (mode === 'system' && prefersDark) ? 'dark' : 'light';
+  const effective = palette === 'espresso' ? 'dark' : 'light';
   const scheme = `only ${effective}`;
-  root.dataset.themeMode = mode;
+  root.dataset.hcPalette = palette;
+  root.dataset.themeMode = effective;
   root.dataset.themeEffective = effective;
+  root.setAttribute('data-theme', effective);
+  root.classList.toggle('dark', effective === 'dark');
   root.style.colorScheme = scheme;
 
   let toolbarBasic = true;
