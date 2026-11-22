@@ -1,10 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Instant, UNIX_EPOCH};
+use tauri::{AppHandle, Manager};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tauri::{AppHandle, Manager};
-use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -59,7 +59,10 @@ fn resolve_node_binary() -> PathBuf {
             }
         }
         if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
-            let p = PathBuf::from(local_app).join("Programs").join("nodejs").join("node.exe");
+            let p = PathBuf::from(local_app)
+                .join("Programs")
+                .join("nodejs")
+                .join("node.exe");
             if p.is_file() {
                 return p;
             }
@@ -92,10 +95,7 @@ fn resolve_node_binary() -> PathBuf {
                 }
             }
         }
-        for candidate in &[
-            "/usr/local/bin/node",
-            "/usr/bin/node",
-        ] {
+        for candidate in &["/usr/local/bin/node", "/usr/bin/node"] {
             let p = PathBuf::from(candidate);
             if p.is_file() {
                 return p;
@@ -183,7 +183,10 @@ fn resolve_script_path_inner(app: &AppHandle, script_name: &str) -> Result<PathB
     if dev_path.exists() {
         return Ok(dev_path);
     }
-    Err(format!("Script not found: {} (tried: {:?})", script_name, dev_path))
+    Err(format!(
+        "Script not found: {} (tried: {:?})",
+        script_name, dev_path
+    ))
 }
 
 fn resolve_script_path(app: &AppHandle, script_name: &str) -> Result<PathBuf, String> {
@@ -260,7 +263,11 @@ pub async fn execute_agent_cli_command(
     };
     let skills_bin = root.join("resources").join("skills").join("bin");
     let old_path = std::env::var("PATH").unwrap_or_default();
-    let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+    let sep = if cfg!(target_os = "windows") {
+        ";"
+    } else {
+        ":"
+    };
     let new_path = format!("{}{}{}", skills_bin.to_string_lossy(), sep, old_path);
 
     let mut cmd = if cfg!(target_os = "windows") {
@@ -276,7 +283,10 @@ pub async fn execute_agent_cli_command(
     cmd.current_dir(&root)
         .env("PATH", new_path)
         .env("HWP_STAGING_PATH", &staging_str)
-        .env("HWP_WRITING_MEMORY_PATH", writing_memory_path.unwrap_or_default())
+        .env(
+            "HWP_WRITING_MEMORY_PATH",
+            writing_memory_path.unwrap_or_default(),
+        )
         .env("HWP_SELECTION_JSON", selection_json.unwrap_or_default())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -302,7 +312,12 @@ pub async fn execute_agent_cli_command(
 
 fn resolve_skill_script(app: &AppHandle, skill: &str) -> Result<PathBuf, String> {
     let rel_parts: &[&str] = match skill {
-        "ref-extract" => &["resources", "skills", "reference-extractor", "ref-extract.mjs"],
+        "ref-extract" => &[
+            "resources",
+            "skills",
+            "reference-extractor",
+            "ref-extract.mjs",
+        ],
         "hwp-cli" => &["resources", "skills", "hwp-document-editor", "hwp-cli.mjs"],
         _ => return Err(format!("허용되지 않은 내장 스킬입니다: {}", skill)),
     };
@@ -338,7 +353,10 @@ fn resolve_skill_script(app: &AppHandle, skill: &str) -> Result<PathBuf, String>
     if dev_path.exists() {
         return Ok(strip_unc_prefix(dev_path));
     }
-    Err(format!("Skill script not found: {} ({:?})", skill, dev_path))
+    Err(format!(
+        "Skill script not found: {} ({:?})",
+        skill, dev_path
+    ))
 }
 
 /// 구조화된 인자 배열로 내장 스킬(ref-extract / hwp-cli) 직접 실행 (셸 미경유, 파일명 주입 원천 차단)
@@ -369,7 +387,11 @@ pub async fn execute_skill_command(
     };
     let skills_bin = root.join("resources").join("skills").join("bin");
     let old_path = std::env::var("PATH").unwrap_or_default();
-    let sep = if cfg!(target_os = "windows") { ";" } else { ":" };
+    let sep = if cfg!(target_os = "windows") {
+        ";"
+    } else {
+        ":"
+    };
     let new_path = format!("{}{}{}", skills_bin.to_string_lossy(), sep, old_path);
 
     let mut cmd = new_node_command();
@@ -378,7 +400,10 @@ pub async fn execute_skill_command(
         .current_dir(&root)
         .env("PATH", new_path)
         .env("HWP_STAGING_PATH", &staging_str)
-        .env("HWP_WRITING_MEMORY_PATH", writing_memory_path.unwrap_or_default())
+        .env(
+            "HWP_WRITING_MEMORY_PATH",
+            writing_memory_path.unwrap_or_default(),
+        )
         .env("HWP_SELECTION_JSON", selection_json.unwrap_or_default())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -404,7 +429,10 @@ pub async fn execute_skill_command(
 
 /// 1) 문서 구조 및 셀 텍스트 전수 검사 (extract_text.js --inspect --with-cell-text)
 #[tauri::command]
-pub async fn inspect_document(app: AppHandle, file_path: String) -> Result<serde_json::Value, String> {
+pub async fn inspect_document(
+    app: AppHandle,
+    file_path: String,
+) -> Result<serde_json::Value, String> {
     let script = resolve_script_path(&app, "extract_text.js")?;
     let file_path = strip_unc_prefix(PathBuf::from(file_path));
     let output = new_node_command()
@@ -422,7 +450,8 @@ pub async fn inspect_document(app: AppHandle, file_path: String) -> Result<serde
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
     let stdout_str = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(&stdout_str).map_err(|e| format!("Invalid JSON from inspect: {} (raw: {})", e, stdout_str))
+    serde_json::from_str(&stdout_str)
+        .map_err(|e| format!("Invalid JSON from inspect: {} (raw: {})", e, stdout_str))
 }
 
 /// 2) 문서 마크다운 텍스트 추출 (extract_text.js --format markdown)
@@ -468,16 +497,24 @@ pub async fn execute_claw_ops(
         .map_err(|e| format!("Failed to spawn {}: {}", script_name, e))?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(payload_json.as_bytes()).await.map_err(|e| e.to_string())?;
+        stdin
+            .write_all(payload_json.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
         stdin.shutdown().await.map_err(|e| e.to_string())?;
     }
 
-    let output = match tokio::time::timeout(std::time::Duration::from_secs(30), child.wait_with_output()).await {
-        Ok(res) => res.map_err(|e| e.to_string())?,
-        Err(_) => {
-            return Err("claw 실행 타임아웃: 30초 내에 프로세스가 응답하지 않았습니다.".to_string());
-        }
-    };
+    let output =
+        match tokio::time::timeout(std::time::Duration::from_secs(30), child.wait_with_output())
+            .await
+        {
+            Ok(res) => res.map_err(|e| e.to_string())?,
+            Err(_) => {
+                return Err(
+                    "claw 실행 타임아웃: 30초 내에 프로세스가 응답하지 않았습니다.".to_string(),
+                );
+            }
+        };
     let stdout_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
 
